@@ -34,8 +34,8 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db() -> AsyncGenerator[None, None]:
     """Create all tables before each test, drop after."""
-    # Import models to register them with Base
-    import app.models.auth  # noqa: F401
+    # Import all models to register them with Base
+    import app.models  # noqa: F401
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -50,3 +50,10 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Direct database session for model-level tests."""
+    async with TestSessionLocal() as session:
+        yield session
