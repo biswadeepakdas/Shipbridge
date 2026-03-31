@@ -10,6 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler
 from app.middleware.logging import setup_logging
+from app.middleware.request_logging import RequestLoggingMiddleware
+from app.middleware.sentry import setup_sentry
+from app.middleware.telemetry import setup_telemetry
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
 
@@ -22,6 +25,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     setup_logging(settings.log_level)
     logger.info("shipbridge_api_starting", environment=settings.environment)
+
+    # Initialize Sentry
+    setup_sentry()
 
     # Test Redis connectivity (non-fatal)
     try:
@@ -47,7 +53,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# Middleware (order matters — outermost first)
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().web_base_url],
@@ -55,6 +62,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# OpenTelemetry auto-instrumentation
+setup_telemetry(app)
 
 # Exception handlers
 app.add_exception_handler(AppError, app_error_handler)

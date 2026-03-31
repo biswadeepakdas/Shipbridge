@@ -68,7 +68,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: cd apps/api && pip install -r requirements.txt && pip install pytest pytest-asyncio httpx
+        run: cd apps/api && pip install -r requirements.txt && pip install pytest pytest-asyncio httpx aiosqlite
 
       - name: Run tests
         env:
