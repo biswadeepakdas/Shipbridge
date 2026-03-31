@@ -15,6 +15,7 @@ from app.middleware.sentry import setup_sentry
 from app.middleware.telemetry import setup_telemetry
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
+from app.routers.projects import router as projects_router
 
 logger = structlog.get_logger()
 
@@ -72,3 +73,4 @@ app.add_exception_handler(AppError, app_error_handler)
 # Routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(projects_router)
