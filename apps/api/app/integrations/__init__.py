@@ -1,1 +1,1 @@
-"""Integrations module — stub for Day 1."""
+"""Integration OS — connector adapters, circuit breakers, vault, and registry."""
