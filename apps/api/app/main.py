@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler
 from app.middleware.logging import setup_logging
+from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
 
 logger = structlog.get_logger()
@@ -60,3 +61,4 @@ app.add_exception_handler(AppError, app_error_handler)
 
 # Routers
 app.include_router(health_router)
+app.include_router(auth_router)

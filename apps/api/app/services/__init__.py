@@ -1,1 +1,1 @@
-"""Services module — stub for Day 1."""
+"""Business logic services."""
