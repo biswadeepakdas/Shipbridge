@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import url('https://fonts.bunny.net/css?family=instrument-sans:400,500,600,700|jetbrains-mono:400,500|jura:400,500,600,700');
+
+body {
+  background-color: #060709;
+  color: #E8EDF5;
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+}
