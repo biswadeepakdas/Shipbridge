@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     web_base_url: str = "http://localhost:3000"
 
+    # GitHub App
+    github_app_id: str = ""
+    github_webhook_secret: str = ""
+    github_private_key: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:
