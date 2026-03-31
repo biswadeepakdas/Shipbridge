@@ -2,6 +2,7 @@
 
 from app.models.auth import APIKey, Membership, Tenant, User
 from app.models.connectors import Connector, ConnectorHealth, NormalizationRule
+from app.models.evals import EvalBaseline, EvalRun
 from app.models.events import AgentEvent, EventSubscription
 from app.models.projects import AssessmentRun, Project
 
@@ -11,6 +12,8 @@ __all__ = [
     "AssessmentRun",
     "Connector",
     "ConnectorHealth",
+    "EvalBaseline",
+    "EvalRun",
     "EventSubscription",
     "Membership",
     "NormalizationRule",
