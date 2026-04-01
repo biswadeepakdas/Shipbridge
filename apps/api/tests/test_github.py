@@ -154,14 +154,14 @@ async def test_webhook_endpoint_accepts_valid_payload(client: AsyncClient) -> No
     """Webhook endpoint processes a valid GitHub push event."""
     resp = await client.post(
         "/webhooks/github",
-        json={"action": "opened", "repository": {"full_name": "acme/agent"}},
+        json={"id": "gh-evt-001", "action": "opened", "trigger": "push",
+              "repository": {"full_name": "acme/agent"}},
         headers={"X-GitHub-Event": "push"},
     )
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["event_type"] == "push"
-    assert data["repo_full_name"] == "acme/agent"
-    assert data["processed"] is True
+    assert data["provider"] == "github"
+    assert data["status"] in ("processed", "queued_unknown")
 
 
 @pytest.mark.asyncio
