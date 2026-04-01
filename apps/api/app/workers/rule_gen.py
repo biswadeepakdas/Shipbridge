@@ -1,140 +1,130 @@
-"""RuleGeneratorJob — drains UnknownEventQueue, generates draft NormalizationRules via LLM.
-
-In production, runs as a Celery beat task every 5 minutes.
-Uses Haiku for structured output → NormalizationRule JSON.
-"""
-
 import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 import structlog
 from pydantic import BaseModel
+from anthropic import Anthropic
+from redis.asyncio import Redis
 
-from app.os_layer.rule_registry import NormalizationRuleEntry, rule_registry
-from app.os_layer.unknown_event_queue import UnknownEvent, unknown_event_queue
+from app.os_layer.rule_registry import NormalizationRuleEntry, RuleRegistry
+from app.os_layer.unknown_event_queue import UnknownEvent, UnknownEventQueue
+from app.config import get_settings
 
 logger = structlog.get_logger()
 
-
 class GeneratedRule(BaseModel):
     """Output of the LLM rule generation process."""
-
     rule: NormalizationRuleEntry
     sample_payload: dict
     confidence: float
     reasoning: str
 
-
 class RuleGenerationResult(BaseModel):
     """Summary of a rule generation batch run."""
-
     processed: int
     generated: int
     failed: int
     rules: list[GeneratedRule]
 
+async def _generate_rule_for_event_llm(event: UnknownEvent) -> Optional[GeneratedRule]:
+    """Generate a draft NormalizationRule for a single unknown event using an LLM."""
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        logger.warning("anthropic_api_key_missing", message="Skipping LLM rule generation due to missing API key.")
+        return None
 
-def _generate_payload_map_from_sample(app: str, trigger: str, sample_payload: dict) -> dict:
-    """Generate a JMESPath payload_map from a sample event payload.
+    client = Anthropic(api_key=settings.anthropic_api_key)
 
-    In production, this would call Haiku with structured output.
-    For now, uses heuristic mapping based on common field patterns.
-    """
-    payload_map: dict[str, str] = {}
+    prompt = f"""You are an expert in event normalization and JMESPath. Your task is to generate a NormalizationRuleEntry in JSON format for an unknown event. The rule should map fields from the raw payload to a normalized structure.
 
-    # Always set event_type from app.trigger
-    payload_map["event_type"] = f"{app}.{trigger.replace('_', '.')}"
+Here is the unknown event:
+App: {event.app}
+Trigger: {event.trigger}
+Sample Payload: {json.dumps(event.raw_payload, indent=2)}
 
-    # Map common field patterns
-    field_mappings = {
-        "id": "payload.id",
-        "name": "payload.name",
-        "title": "payload.title",
-        "status": "payload.status",
-        "state": "payload.state",
-        "email": "payload.email",
-        "amount": "payload.amount",
-        "url": "payload.url",
-        "description": "payload.description",
-        "created_at": "payload.created_at",
-        "updated_at": "payload.updated_at",
-        "user": "payload.user",
-        "assignee": "payload.assignee",
-        "priority": "payload.priority",
-        "type": "payload.type",
-        "source": "payload.source",
-    }
+Your output MUST be a JSON object matching the NormalizationRuleEntry schema, including a 'payload_map' which is a dictionary of JMESPath expressions. The 'event_type' in the payload_map should be '{event.app}.{event.trigger.replace('_', '.')}'. Set the 'status' to 'draft' and 'version' to 1. Provide a confidence score (0.0-1.0) and reasoning for your generated rule.
 
-    # Walk the sample payload and map recognized fields
-    def _walk(obj: dict, prefix: str = "payload") -> None:
-        for key, value in obj.items():
-            full_path = f"{prefix}.{key}"
-            lower_key = key.lower()
+NormalizationRuleEntry Schema:
+{{
+    "rule_id": "string (UUID)",
+    "app": "string",
+    "trigger": "string",
+    "payload_map": {{ "event_type": "string", ... }},
+    "status": "string (draft|active|archived)",
+    "version": "integer"
+}}
 
-            # Check if this field matches a known pattern
-            for pattern, _ in field_mappings.items():
-                if pattern in lower_key:
-                    payload_map[lower_key.replace(".", "_")] = full_path
-                    break
+Example for a GitHub 'push' event:
+{{
+    "rule_id": "{{uuid.uuid4()}}",
+    "app": "github",
+    "trigger": "push",
+    "payload_map": {{
+        "event_type": "github.push",
+        "repo_name": "repository.name",
+        "pusher_name": "pusher.name",
+        "ref": "ref",
+        "commit_id": "head_commit.id"
+    }},
+    "status": "draft",
+    "version": 1
+}}
 
-            # Recurse into nested dicts (1 level deep)
-            if isinstance(value, dict) and prefix == "payload":
-                _walk(value, full_path)
+Generate the JSON for the NormalizationRuleEntry:
+"""
 
-    if sample_payload:
-        _walk(sample_payload)
-
-    return payload_map
-
-
-def _generate_rule_for_event(event: UnknownEvent) -> GeneratedRule | None:
-    """Generate a draft NormalizationRule for a single unknown event.
-
-    In production, would call Claude Haiku with:
-    - The trigger schema from Composio
-    - The sample payload
-    - Instructions to output a NormalizationRule JSON
-    """
     try:
-        payload_map = _generate_payload_map_from_sample(
-            event.app, event.trigger, event.raw_payload,
+        response = await client.messages.create(
+            model="claude-3-haiku-20240307", # Using Haiku as per docstring
+            max_tokens=1000,
+            temperature=0.7,
+            system="You are an expert in event normalization and JMESPath. Output only valid JSON.",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
         )
+        
+        llm_output = response.content[0].text
+        # Attempt to parse the LLM output, it might be wrapped in markdown
+        if llm_output.startswith("```json") and llm_output.endswith("```"):
+            llm_output = llm_output[7:-3].strip()
 
-        if not payload_map.get("event_type"):
-            return None
-
+        generated_data = json.loads(llm_output)
+        
         rule = NormalizationRuleEntry(
-            rule_id=str(uuid.uuid4()),
-            app=event.app,
-            trigger=event.trigger,
-            payload_map=payload_map,
+            rule_id=str(uuid.uuid4()), # Ensure UUID is generated if LLM doesn't provide it
+            app=generated_data.get("app", event.app),
+            trigger=generated_data.get("trigger", event.trigger),
+            payload_map=generated_data.get("payload_map", {}),
             status="draft",
-            version=1,
+            version=1
         )
-
-        # Validate by checking if the rule would produce output
-        confidence = 0.7 if len(payload_map) > 2 else 0.4
+        confidence = generated_data.get("confidence", 0.8) # LLM can provide confidence
+        reasoning = generated_data.get("reasoning", "Generated by LLM from sample payload.")
 
         return GeneratedRule(
             rule=rule,
             sample_payload=event.raw_payload,
             confidence=confidence,
-            reasoning=f"Generated from sample payload with {len(payload_map)} field mappings",
+            reasoning=reasoning,
         )
 
     except Exception as e:
-        logger.error("rule_generation_failed", app=event.app, trigger=event.trigger, error=str(e))
+        logger.error("llm_rule_generation_failed", app=event.app, trigger=event.trigger, error=str(e))
         return None
 
-
-def run_rule_generator(batch_size: int = 50) -> RuleGenerationResult:
-    """Drain unknown events and generate draft rules.
+async def run_rule_generator(redis: Redis, batch_size: int = 50) -> RuleGenerationResult:
+    """Drain unknown events and generate draft rules using LLM.
 
     This is the main entry point called by Celery beat every 5 minutes.
     """
-    events = unknown_event_queue.drain(limit=batch_size)
+    unknown_event_queue = UnknownEventQueue(redis)
+    rule_registry = RuleRegistry(redis)
+
+    events = await unknown_event_queue.drain(limit=batch_size)
 
     if not events:
         return RuleGenerationResult(processed=0, generated=0, failed=0, rules=[])
@@ -152,14 +142,14 @@ def run_rule_generator(batch_size: int = 50) -> RuleGenerationResult:
         seen_triggers.add(trigger_key)
 
         # Skip if a rule already exists (active or draft)
-        existing = rule_registry.lookup(event.app, event.trigger)
+        existing = await rule_registry.lookup(event.app, event.trigger)
         if existing:
             continue
 
-        result = _generate_rule_for_event(event)
+        result = await _generate_rule_for_event_llm(event) # Use async LLM call
         if result:
             # Register as draft in the registry
-            rule_registry.register(result.rule)
+            await rule_registry.register(result.rule)
             generated_rules.append(result)
             logger.info("draft_rule_generated", app=event.app, trigger=event.trigger,
                        rule_id=result.rule.rule_id, confidence=result.confidence)
@@ -173,33 +163,25 @@ def run_rule_generator(batch_size: int = 50) -> RuleGenerationResult:
         rules=generated_rules,
     )
 
-
-# --- Schema Hash Drift Detection ---
+# --- Schema Hash Drift Detection (remains as is for now) ---
 
 class SchemaHash(BaseModel):
     """Hash record for Composio trigger schema drift detection."""
-
     app: str
     trigger: str
     schema_hash: str
     checked_at: str
     needs_review: bool = False
 
-
 _schema_hashes: dict[str, SchemaHash] = {}
-
 
 def compute_schema_hash(app: str, trigger: str, schema: dict) -> str:
     """Compute SHA-256 hash of a trigger schema for drift detection."""
     canonical = json.dumps(schema, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
-
 def check_schema_drift(app: str, trigger: str, current_schema: dict) -> SchemaHash:
-    """Compare current schema hash against stored hash. Flags drift if changed.
-
-    Called nightly by SchemaHashJob to detect Composio SDK version changes.
-    """
+    """Compare current schema hash against stored hash. Flags drift if changed."""
     key = f"{app}:{trigger}"
     current_hash = compute_schema_hash(app, trigger, current_schema)
     now = datetime.now(timezone.utc).isoformat()
@@ -218,7 +200,6 @@ def check_schema_drift(app: str, trigger: str, current_schema: dict) -> SchemaHa
     )
     _schema_hashes[key] = entry
     return entry
-
 
 def list_drifted_schemas() -> list[SchemaHash]:
     """List all schemas flagged for review due to drift."""

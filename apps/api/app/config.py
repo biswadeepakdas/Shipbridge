@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
     github_private_key: str = ""
 
+    # Salesforce
+    salesforce_username: str | None = None
+    salesforce_password: str | None = None
+    salesforce_security_token: str | None = None
+    salesforce_instance_url: str | None = None
+
+    # Notion
+    notion_api_key: str | None = None
+
 @lru_cache
 def get_settings() -> Settings:
     """Singleton settings instance."""

@@ -1,11 +1,12 @@
-"""NotionAdapter — OAuth2, normalize() for pages, databases, and blocks."""
-
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
+
+from notion_client import Client
+from notion_client.errors import APIResponseError
 
 from app.integrations.adapter import ConnectorAdapter, ConnectorHealthResult, NormalizedData
-
+from app.config import get_settings
 
 class NotionAdapter(ConnectorAdapter):
     """Connector for Notion — pages, databases, and blocks."""
@@ -14,87 +15,89 @@ class NotionAdapter(ConnectorAdapter):
 
     def __init__(self, access_token: str = "") -> None:
         self.access_token = access_token
+        self.notion_client: Optional[Client] = None
+
+    async def _connect(self) -> None:
+        settings = get_settings()
+        if not self.notion_client:
+            token = self.access_token or settings.notion_api_key
+            if not token:
+                raise ConnectionError("Notion API key or access token is missing.")
+            self.notion_client = Client(auth=token)
 
     async def fetch(self, query: dict) -> dict[str, Any]:
         """Fetch data from Notion API.
 
-        In production, this would make real HTTP calls to the Notion API.
-
         Args:
-            query: {"type": "page|database|search", "id": "...", "filters": {...}}
+            query: {"type": "page|database|search", "id": "...", "filters": {...}, "query": "..."}
         """
+        await self._connect()
+        if not self.notion_client:
+            raise ConnectionError("Notion client not initialized.")
+
         query_type = query.get("type", "search")
+        object_id = query.get("id")
+        filters = query.get("filters", {})
+        search_query = query.get("query")
 
-        simulated: dict[str, dict] = {
-            "page": {
-                "object": "page",
-                "id": "page-001",
-                "properties": {
-                    "title": {"title": [{"plain_text": "Q4 Planning Document"}]},
-                    "Status": {"select": {"name": "In Progress"}},
-                    "Priority": {"select": {"name": "High"}},
-                    "Assigned": {"people": [{"name": "Alice Johnson"}]},
-                },
-                "created_time": "2026-03-01T10:00:00.000Z",
-                "last_edited_time": "2026-03-28T14:30:00.000Z",
-            },
-            "database": {
-                "object": "database",
-                "id": "db-001",
-                "title": [{"plain_text": "Product Roadmap"}],
-                "results": [
-                    {"id": "row-1", "properties": {
-                        "Name": {"title": [{"plain_text": "Feature A"}]},
-                        "Status": {"select": {"name": "Done"}},
-                        "Sprint": {"select": {"name": "Sprint 12"}},
-                    }},
-                    {"id": "row-2", "properties": {
-                        "Name": {"title": [{"plain_text": "Feature B"}]},
-                        "Status": {"select": {"name": "In Progress"}},
-                        "Sprint": {"select": {"name": "Sprint 13"}},
-                    }},
-                    {"id": "row-3", "properties": {
-                        "Name": {"title": [{"plain_text": "Feature C"}]},
-                        "Status": {"select": {"name": "Planned"}},
-                        "Sprint": {"select": {"name": "Sprint 14"}},
-                    }},
-                ],
-            },
-            "search": {
-                "object": "list",
-                "results": [
-                    {"object": "page", "id": "page-001",
-                     "properties": {"title": {"title": [{"plain_text": "Q4 Planning"}]}}},
-                    {"object": "page", "id": "page-002",
-                     "properties": {"title": {"title": [{"plain_text": "Meeting Notes"}]}}},
-                    {"object": "database", "id": "db-001",
-                     "title": [{"plain_text": "Product Roadmap"}]},
-                ],
-            },
-        }
+        try:
+            if query_type == "page" and object_id:
+                response = self.notion_client.pages.retrieve(page_id=object_id)
+            elif query_type == "database" and object_id:
+                response = self.notion_client.databases.query(database_id=object_id, filter=filters)
+            elif query_type == "search" and search_query:
+                response = self.notion_client.search(query=search_query, filter=filters)
+            else:
+                raise ValueError(f"Invalid Notion query type or missing ID/query: {query_type}")
+            
+            # Add objectType for normalization helper
+            if "object" in response:
+                response["objectType"] = response["object"]
+            elif "results" in response and response["results"] and "object" in response["results"][0]:
+                response["objectType"] = response["results"][0]["object"]
+            else:
+                response["objectType"] = query_type
 
-        return simulated.get(query_type, {"object": "list", "results": []})
+            return response
+        except APIResponseError as e:
+            raise RuntimeError(f"Notion API call failed: {e.code} - {e.message}") from e
 
     async def health_check(self) -> ConnectorHealthResult:
         """Check Notion API connectivity."""
         start = time.monotonic()
-        latency = (time.monotonic() - start) * 1000 + 28.0  # simulated ~28ms
+        status = "unhealthy"
+        error_message = None
+        try:
+            await self._connect()
+            if self.notion_client:
+                # Attempt a simple API call to verify connectivity (e.g., list users)
+                # Note: listing users requires 'read_user' capability
+                # A simpler check might be to just retrieve a non-existent block/page to test auth
+                self.notion_client.users.list()
+                status = "healthy"
+        except APIResponseError as e:
+            error_message = f"Notion API error: {e.code} - {e.message}"
+        except Exception as e:
+            error_message = str(e)
+
+        latency = (time.monotonic() - start) * 1000
 
         return ConnectorHealthResult(
-            status="healthy",
+            status=status,
             latency_ms=round(latency, 2),
             checked_at=datetime.now(timezone.utc).isoformat(),
+            error_message=error_message
         )
 
     def normalize(self, raw_data: dict[str, Any]) -> NormalizedData:
         """Transform Notion API response into agent-friendly markdown."""
-        obj_type = raw_data.get("object", "unknown")
+        obj_type = raw_data.get("objectType", "unknown")
 
         if obj_type == "page":
             return self._normalize_page(raw_data)
         elif obj_type == "database":
-            return self._normalize_database(raw_data)
-        elif obj_type == "list":
+            return self._normalize_database_query_results(raw_data)
+        elif obj_type == "list" or obj_type == "search": # Search results are typically a list
             return self._normalize_search(raw_data)
         else:
             return NormalizedData(
@@ -110,8 +113,8 @@ class NotionAdapter(ConnectorAdapter):
         title = self._extract_title(props.get("title", {}))
 
         lines = [f"# {title}\n"]
-        lines.append(f"- **Created**: {data.get('created_time', 'N/A')}")
-        lines.append(f"- **Last edited**: {data.get('last_edited_time', 'N/A')}")
+        lines.append(f"- **Created**: {data.get("created_time", "N/A")}")
+        lines.append(f"- **Last edited**: {data.get("last_edited_time", "N/A")}")
 
         for key, value in props.items():
             if key == "title":
@@ -128,30 +131,38 @@ class NotionAdapter(ConnectorAdapter):
             fetched_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    def _normalize_database(self, data: dict) -> NormalizedData:
-        """Normalize a Notion database query result."""
-        title_list = data.get("title", [])
-        db_title = title_list[0].get("plain_text", "Untitled") if title_list else "Untitled"
+    def _normalize_database_query_results(self, data: dict) -> NormalizedData:
+        """Normalize Notion database query results."""
         results = data.get("results", [])
+        
+        # Try to get database title from the first result if available, or from query context if passed
+        db_title = "Untitled Database"
+        if results and "parent" in results[0] and "database_id" in results[0]["parent"]:
+            # This is tricky as database title is not directly in query results
+            # For now, we'll use a generic title or try to infer from properties
+            pass # Will need to fetch database metadata separately for a proper title
 
         lines = [f"# {db_title} ({len(results)} rows)\n"]
-        lines.append("| Name | Status | Details |")
-        lines.append("|------|--------|---------|")
+        if results:
+            # Attempt to get property names for header
+            first_props = results[0].get("properties", {})
+            headers = ["Name"] + [k for k in first_props.keys() if k != "Name"]
+            lines.append("| " + " | ".join(headers) + " |")
+            lines.append("|---" * len(headers) + "|")
 
-        for row in results:
-            props = row.get("properties", {})
-            name = self._extract_title(props.get("Name", {}))
-            status = self._extract_property_value(props.get("Status", {}))
-            other = {k: self._extract_property_value(v) for k, v in props.items()
-                     if k not in ("Name", "Status") and self._extract_property_value(v)}
-            details = ", ".join(f"{k}: {v}" for k, v in other.items()) if other else "—"
-            lines.append(f"| {name} | {status} | {details} |")
+            for row in results:
+                props = row.get("properties", {})
+                row_values = []
+                for header in headers:
+                    value = self._extract_property_value(props.get(header, {}))
+                    row_values.append(value if value else "—")
+                lines.append("| " + " | ".join(row_values) + " |")
 
         return NormalizedData(
             source="notion",
             data_type="database",
             content="\n".join(lines),
-            metadata={"database_id": data.get("id", ""), "row_count": len(results)},
+            metadata={"row_count": len(results)},
             fetched_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -164,11 +175,12 @@ class NotionAdapter(ConnectorAdapter):
             obj = item.get("object", "unknown")
             if obj == "page":
                 title = self._extract_title(item.get("properties", {}).get("title", {}))
-                lines.append(f"- **Page**: {title} (id: {item.get('id', '')})")
+                lines.append(f"- **Page**: {title} (id: {item.get("id", "")})")
             elif obj == "database":
-                title_list = item.get("title", [])
-                title = title_list[0].get("plain_text", "Untitled") if title_list else "Untitled"
-                lines.append(f"- **Database**: {title} (id: {item.get('id', '')})")
+                # Database title is not directly in search results, need to retrieve separately
+                lines.append(f"- **Database**: ID: {item.get("id", "")} (title not available)")
+            elif obj == "block":
+                lines.append(f"- **Block**: ID: {item.get("id", "")} (content not directly available)")
 
         return NormalizedData(
             source="notion",
@@ -181,9 +193,8 @@ class NotionAdapter(ConnectorAdapter):
     @staticmethod
     def _extract_title(prop: dict) -> str:
         """Extract plain text from a Notion title property."""
-        title_list = prop.get("title", [])
-        if title_list and isinstance(title_list, list):
-            return title_list[0].get("plain_text", "Untitled")
+        if "title" in prop and prop["title"]:
+            return prop["title"][0].get("plain_text", "Untitled") if prop["title"] else "Untitled"
         return "Untitled"
 
     @staticmethod
@@ -191,6 +202,8 @@ class NotionAdapter(ConnectorAdapter):
         """Extract display value from a Notion property."""
         if "select" in prop and prop["select"]:
             return prop["select"].get("name", "")
+        if "multi_select" in prop and prop["multi_select"]:
+            return ", ".join(s.get("name", "") for s in prop["multi_select"])
         if "people" in prop and prop["people"]:
             return ", ".join(p.get("name", "") for p in prop["people"])
         if "title" in prop and prop["title"]:
@@ -199,4 +212,27 @@ class NotionAdapter(ConnectorAdapter):
             return prop["rich_text"][0].get("plain_text", "") if prop["rich_text"] else ""
         if "number" in prop and prop["number"] is not None:
             return str(prop["number"])
+        if "url" in prop and prop["url"]:
+            return prop["url"]
+        if "email" in prop and prop["email"]:
+            return prop["email"]
+        if "phone_number" in prop and prop["phone_number"]:
+            return prop["phone_number"]
+        if "checkbox" in prop and prop["checkbox"] is not None:
+            return "Yes" if prop["checkbox"] else "No"
+        if "date" in prop and prop["date"] and "start" in prop["date"]:
+            return prop["date"]["start"]
+        if "files" in prop and prop["files"]:
+            return ", ".join(f.get("name", "") for f in prop["files"])
+        if "formula" in prop and prop["formula"] and "string" in prop["formula"]:
+            return prop["formula"]["string"]
+        if "relation" in prop and prop["relation"]:
+            return f"{len(prop["relation"])} related items"
+        if "rollup" in prop and prop["rollup"] and "number" in prop["rollup"]:
+            return str(prop["rollup"]["number"])
+        if "created_time" in prop and prop["created_time"]:
+            return prop["created_time"]
+        if "last_edited_time" in prop and prop["last_edited_time"]:
+            return prop["last_edited_time"]
+        
         return ""

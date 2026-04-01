@@ -1,9 +1,7 @@
-"""Governance routes — audit log, HITL gates, compliance PDF."""
-
 import uuid
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -213,3 +211,47 @@ async def get_pdf_html(
     )
 
     return HTMLResponse(content=report.html)
+
+@router.get("/pdf/{project_id}/download", response_class=Response, responses={200: {"content": {"application/pdf": {}}}}) # New endpoint for PDF download
+async def download_pdf(
+    project_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download the compliance report as a PDF file."""
+    result = await db.execute(
+        select(Project).where(
+            Project.id == uuid.UUID(project_id),
+            Project.tenant_id == uuid.UUID(auth.tenant_id),
+        )
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise AppError(ErrorCode.NOT_FOUND, f"Project {project_id} not found")
+
+    assess_result = await db.execute(
+        select(AssessmentRun)
+        .where(AssessmentRun.project_id == project.id, AssessmentRun.status == "complete")
+        .order_by(AssessmentRun.created_at.desc()).limit(1)
+    )
+    assessment = assess_result.scalar_one_or_none()
+    if not assessment:
+        raise AppError(ErrorCode.NOT_FOUND, "No completed assessment found")
+
+    audit_stats = audit_logger.get_stats(auth.tenant_id).model_dump()
+
+    report = generate_compliance_report(
+        project_name=project.name,
+        tenant_name=auth.tenant_id,
+        scores_json=assessment.scores_json,
+        gap_report_json=assessment.gap_report_json,
+        audit_stats=audit_stats,
+        generated_by=auth.user_id,
+    )
+
+    if not report.pdf_bytes:
+        raise AppError(ErrorCode.INTERNAL_SERVER_ERROR, "Failed to generate PDF bytes.")
+
+    return Response(content=report.pdf_bytes, media_type="application/pdf", headers={
+        "Content-Disposition": f"attachment; filename=\"{project.name}_compliance_report.pdf\""
+    })

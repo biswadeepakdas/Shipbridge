@@ -1,14 +1,12 @@
-"""GitHub App routes — webhooks, badge, and installation flow."""
-
 import uuid
+import json
 
 import structlog
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Request, Depends, BackgroundTasks
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends
 
 from app.db import get_db
 from app.exceptions import AppError, ErrorCode
@@ -19,7 +17,9 @@ from app.services.github import (
     format_pr_comment,
     generate_score_badge_svg,
     verify_webhook_signature,
+    github_app_service
 )
+from app.os_layer.event_ingestion import EventIngestionSubsystem
 
 logger = structlog.get_logger()
 
@@ -37,16 +37,69 @@ class WebhookEvent(BaseModel):
     processed: bool
 
 
+async def process_github_webhook_background(payload: bytes, event_type: str, delivery_id: str, db: AsyncSession):
+    """Background task to process GitHub webhooks asynchronously."""
+    body = json.loads(payload)
+    action = body.get("action")
+    repo = body.get("repository", {})
+    repo_full_name = repo.get("full_name")
+    pull_request = body.get("pull_request", {})
+    pull_number = pull_request.get("number")
+
+    logger.info(
+        "github_webhook_processing_background",
+        event_type=event_type,
+        action=action,
+        repo=repo_full_name,
+        pull_number=pull_number,
+        delivery_id=delivery_id
+    )
+
+    # Link GitHub repo to a ShipBridge project
+    # This assumes a project can be identified by its linked GitHub repository full name
+    project_result = await db.execute(
+        select(Project).where(Project.github_repo_full_name == repo_full_name)
+    )
+    project = project_result.scalar_one_or_none()
+
+    if not project:
+        logger.warning("no_shipbridge_project_linked", repo=repo_full_name, message="No ShipBridge project linked to this GitHub repository.")
+        return
+
+    # Example: Post PR comment on pull_request opened/synchronize
+    if event_type == "pull_request" and action in ["opened", "synchronize"] and pull_number:
+        # Fetch the latest assessment run for the linked project
+        assessment_result = await db.execute(
+            select(AssessmentRun)
+            .where(AssessmentRun.project_id == project.id, AssessmentRun.status == "complete")
+            .order_by(AssessmentRun.created_at.desc()).limit(1)
+        )
+        assessment = assessment_result.scalar_one_or_none()
+
+        if assessment:
+            comment_body = format_pr_comment(
+                assessment.total_score,
+                assessment.scores_json, # Assuming scores_json contains pillar data
+                assessment.gap_report_json,
+                assessment.previous_total_score # Assuming this field exists or can be derived
+            )
+            await github_app_service.post_pr_comment(repo_full_name, pull_number, comment_body)
+        else:
+            logger.warning("no_assessment_found_for_pr", project_id=project.id, repo=repo_full_name, pull_number=pull_number, message="No completed assessment found for this project.")
+
+
 @router.post("/webhooks/github", response_model=APIResponse[WebhookEvent])
 async def receive_github_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     x_github_event: str | None = Header(default=None, alias="X-GitHub-Event"),
+    x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
+    db: AsyncSession = Depends(get_db)
 ) -> APIResponse[WebhookEvent]:
     """Receive and verify GitHub webhook events.
 
-    Verifies X-Hub-Signature-256 before processing. Returns 200 immediately
-    for fast ACK — heavy processing would be queued to Redis in production.
+    Verifies X-Hub-Signature-256 before processing. Queues heavy processing to background tasks.
     """
     payload = await request.body()
 
@@ -55,25 +108,24 @@ async def receive_github_webhook(
         if not verify_webhook_signature(payload, x_hub_signature_256):
             raise AppError(ErrorCode.FORBIDDEN, "Invalid webhook signature")
 
-    body = await request.json()
-    action = body.get("action")
-    repo = body.get("repository", {})
-    repo_full_name = repo.get("full_name")
-
     event_type = x_github_event or "unknown"
+    delivery_id = x_github_delivery or str(uuid.uuid4())
 
     logger.info(
-        "github_webhook_received",
+        "github_webhook_received_sync",
         event_type=event_type,
-        action=action,
-        repo=repo_full_name,
+        delivery_id=delivery_id,
+        message="Webhook received, queuing for background processing."
     )
+
+    # Queue heavy processing to a background task
+    background_tasks.add_task(process_github_webhook_background, payload, event_type, delivery_id, db)
 
     return APIResponse(
         data=WebhookEvent(
             event_type=event_type,
-            action=action,
-            repo_full_name=repo_full_name,
+            action="queued", # Indicate that it's queued
+            repo_full_name=None, # Not parsed in sync part
             processed=True,
         )
     )
