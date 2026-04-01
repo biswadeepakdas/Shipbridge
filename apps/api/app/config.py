@@ -41,7 +41,9 @@ class Settings(BaseSettings):
 
     # Temporal deployment mode
     use_temporal: bool = True  # Default to true for production-ready fix
-    enable_chaos_testing: bool = False  # Set to True in staging to inject controlled faults
+    enable_chaos_testing: bool = False
+    stripe_api_key: str | None = None
+    betterstack_heartbeat_url: str | None = None  # Set to True in staging to inject controlled faults
 
     # GitHub App
     github_app_id: str = get_secret("GITHUB_APP_ID", default="")
