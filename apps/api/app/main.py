@@ -15,6 +15,7 @@ from app.middleware.sentry import setup_sentry
 from app.middleware.telemetry import setup_telemetry
 from app.routers.auth import router as auth_router
 from app.routers.connectors import router as connectors_router
+from app.routers.context import router as context_router
 from app.routers.costs import router as costs_router
 from app.routers.evals import router as evals_router
 from app.routers.github import router as github_router
@@ -81,6 +82,7 @@ app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(evals_router)
 app.include_router(connectors_router)
+app.include_router(context_router)
 app.include_router(costs_router)
 app.include_router(rules_router)
 app.include_router(github_router)
