@@ -1,11 +1,3 @@
-"""StagedDeploymentWorkflow — 4-stage pipeline with readiness gate.
-
-Stages: sandbox → canary5 (5%) → canary25 (25%) → production (100%)
-Each stage has: gate check → execute → collect metrics → advance or rollback.
-
-In production, runs as a Temporal workflow with durable checkpointing.
-"""
-
 import uuid
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -14,6 +6,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from temporalio import workflow, activity
 import structlog
+import json
 
 from app.governance.audit import AuditAction, audit_logger
 
@@ -74,6 +67,25 @@ class DeploymentActivities:
 class StagedDeploymentWorkflow:
     @workflow.run
     async def run(self, project_id: str, tenant_id: str, readiness_score: int) -> str:
+        # Import WebSocket manager inside workflow to avoid circular dependencies
+        try:
+            from app.routers.websocket import manager
+        except ImportError:
+            manager = None
+            logger.warning("websocket_manager_not_available", message="WebSocket manager not imported, cannot broadcast deployment updates.")
+
+        async def broadcast_status(stage: DeployStage, status: StageStatus, message: str = ""):
+            if manager:
+                await manager.broadcast(json.dumps({
+                    "type": "deployment_update",
+                    "project_id": str(project_id),
+                    "stage": stage.value,
+                    "status": status.value,
+                    "message": message
+                }))
+
+        await broadcast_status(DeployStage.SANDBOX, StageStatus.PENDING, "Starting deployment workflow.")
+
         # 1. Readiness Gate
         passed = await workflow.execute_activity(
             DeploymentActivities.check_readiness_gate,
@@ -81,6 +93,7 @@ class StagedDeploymentWorkflow:
             start_to_close_timeout=timedelta(seconds=10)
         )
         if not passed:
+            await broadcast_status(DeployStage.SANDBOX, StageStatus.FAILED, "Readiness gate failed.")
             return "failed_readiness_gate"
 
         stages = [
@@ -93,6 +106,8 @@ class StagedDeploymentWorkflow:
         baseline_metrics: Optional[StageMetrics] = None
 
         for stage_name, traffic_pct, duration in stages:
+            await broadcast_status(stage_name, StageStatus.ACTIVE, f"Entering {stage_name.value} stage.")
+
             # Update Traffic
             await workflow.execute_activity(
                 DeploymentActivities.update_traffic_pct,
@@ -118,9 +133,13 @@ class StagedDeploymentWorkflow:
                         args=["rollback", project_id, 0],
                         start_to_close_timeout=timedelta(seconds=30)
                     )
+                    await broadcast_status(stage_name, StageStatus.ROLLED_BACK, f"Rolled back from {stage_name.value} due to metrics degradation.")
                     return f"rolled_back_from_{stage_name.value}"
                 
                 if stage_name == DeployStage.SANDBOX:
                     baseline_metrics = metrics
+            
+            await broadcast_status(stage_name, StageStatus.COMPLETE, f"Completed {stage_name.value} stage.")
 
+        await broadcast_status(DeployStage.PRODUCTION, StageStatus.COMPLETE, "Deployment completed successfully.")
         return "completed_successfully"

@@ -1,5 +1,3 @@
-"""ShipBridge API — FastAPI application factory."""
-
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -28,6 +26,7 @@ from app.routers.projects import router as projects_router
 from app.routers.rules import router as rules_router
 from app.routers.subscriptions import router as subscriptions_router
 from app.routers.webhooks import router as webhooks_router
+from app.routers.websocket import router as websocket_router # Import the new websocket router
 
 logger = structlog.get_logger()
 
@@ -100,3 +99,4 @@ app.include_router(rules_router)
 app.include_router(subscriptions_router)
 app.include_router(webhooks_router)
 app.include_router(github_router)
+app.include_router(websocket_router) # Include the new websocket router

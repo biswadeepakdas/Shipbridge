@@ -1,5 +1,3 @@
-"""OpenTelemetry instrumentation for traces and metrics."""
-
 import structlog
 from fastapi import FastAPI
 
@@ -23,6 +21,8 @@ def setup_telemetry(app: FastAPI) -> None:
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -39,6 +39,8 @@ def setup_telemetry(app: FastAPI) -> None:
         trace.set_tracer_provider(provider)
 
         FastAPIInstrumentor.instrument_app(app)
+        Psycopg2Instrumentor().instrument()
+        RedisInstrumentor().instrument()
         logger.info("otel_initialized", endpoint=settings.otel_exporter_otlp_endpoint)
 
     except ImportError:

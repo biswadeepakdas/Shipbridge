@@ -5,6 +5,10 @@ from typing import List, Optional
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
+import structlog
+
+logger = structlog.get_logger()
+
 class NormalizationRuleEntry(BaseModel):
     """A cached normalization rule entry."""
     rule_id: str
@@ -31,6 +35,8 @@ class RuleRegistry:
         rule.updated_at = datetime.now(timezone.utc).isoformat()
         key = self._rule_key(rule.app, rule.trigger)
         await self.redis.set(key, rule.model_dump_json(), ex=self.rule_ttl)
+        # Broadcast update
+        await self._broadcast_rule_update(rule)
 
     async def lookup(self, app: str, trigger: str) -> Optional[NormalizationRuleEntry]:
         """Lookup an active rule by (app, trigger) from Redis."""
@@ -81,6 +87,14 @@ class RuleRegistry:
         async for key in self.redis.scan_iter(f"{self.rule_prefix}*"):
             await self.redis.delete(key)
 
-# The singleton will now be instantiated with a Redis client in the FastAPI app's lifespan event
-# For now, we remove the global singleton to avoid issues with direct imports
-# rule_registry = RuleRegistry()
+    async def _broadcast_rule_update(self, rule: NormalizationRuleEntry) -> None:
+        """Broadcasts a rule update to connected WebSocket clients."""
+        try:
+            from app.routers.websocket import manager
+            message = {"type": "rule_update", "rule": rule.model_dump()}
+            await manager.broadcast(json.dumps(message))
+            logger.info("rule_update_broadcasted", rule_id=rule.rule_id, status=rule.status)
+        except ImportError:
+            logger.warning("websocket_manager_not_available", message="WebSocket manager not imported, cannot broadcast rule update.")
+        except Exception as e:
+            logger.error("rule_broadcast_error", error=str(e))
