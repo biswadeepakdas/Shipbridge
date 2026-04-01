@@ -1,0 +1,8 @@
+name = "shipbridge-waf"
+compatibility_date = "2024-01-01"
+
+[vars]
+ENVIRONMENT = "production"
+
+# Zone-level WAF rules are managed via waf-rules.json
+# Applied using the Cloudflare API — see README.md for deployment steps

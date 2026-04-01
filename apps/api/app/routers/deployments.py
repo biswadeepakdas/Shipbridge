@@ -53,6 +53,21 @@ async def trigger_deployment(
     assessment = assess_result.scalar_one_or_none()
     readiness_score = assessment.total_score if assessment else 0
 
+    # Use Temporal if configured, otherwise in-memory engine
+    from app.config import get_settings
+    from datetime import datetime, timezone
+    settings = get_settings()
+    if settings.use_temporal:
+        from app.workers.temporal_workflows import temporal_deployment_client
+        wf_id = await temporal_deployment_client.start_deployment(
+            project_id=str(project.id), tenant_id=auth.tenant_id, readiness_score=readiness_score,
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        return APIResponse(data=DeploymentWorkflow(
+            id=wf_id, project_id=str(project.id), tenant_id=auth.tenant_id,
+            readiness_score=readiness_score, status="running", created_at=now, updated_at=now,
+        ))
+
     workflow = deployment_engine.create_workflow(
         project_id=str(project.id),
         tenant_id=auth.tenant_id,

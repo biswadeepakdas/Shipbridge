@@ -109,5 +109,90 @@ class OAuthVault:
         return (expires - timedelta(seconds=buffer_seconds)) < datetime.now(timezone.utc)
 
 
-# Singleton vault
+class SupabaseVault:
+    """Supabase Vault-backed credential storage (AES-256-GCM via pgsodium).
+
+    Uses Supabase Vault SQL functions for real encryption at rest.
+    Requires PostgreSQL with the vault extension enabled.
+    """
+
+    def __init__(self, session_factory: object) -> None:
+        self._session_factory = session_factory
+
+    def _secret_name(self, tenant_id: str, connector_id: str) -> str:
+        return f"shipbridge:{tenant_id}:{connector_id}"
+
+    async def store(
+        self,
+        tenant_id: str,
+        connector_id: str,
+        credential_type: str,
+        data: str,
+        expires_in_seconds: int | None = None,
+    ) -> StoredCredential:
+        """Store a credential in Supabase Vault (AES-256 encrypted)."""
+        from sqlalchemy import text
+
+        name = self._secret_name(tenant_id, connector_id)
+        now = datetime.now(timezone.utc)
+
+        async with self._session_factory() as session:
+            await session.execute(
+                text("SELECT vault.create_secret(:secret, :name, :description)"),
+                {"secret": data, "name": name, "description": f"{credential_type}:{connector_id}"},
+            )
+            await session.commit()
+
+        expires_at = None
+        if expires_in_seconds:
+            expires_at = (now + timedelta(seconds=expires_in_seconds)).isoformat()
+
+        return StoredCredential(
+            id=name,
+            connector_id=connector_id,
+            tenant_id=tenant_id,
+            credential_type=credential_type,
+            encrypted_data="[vault-encrypted]",
+            expires_at=expires_at,
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        )
+
+    async def retrieve(self, tenant_id: str, connector_id: str) -> str | None:
+        """Retrieve and decrypt a credential from Supabase Vault."""
+        from sqlalchemy import text
+
+        name = self._secret_name(tenant_id, connector_id)
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text("SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = :name"),
+                {"name": name},
+            )
+            row = result.first()
+            return row[0] if row else None
+
+    async def delete(self, tenant_id: str, connector_id: str) -> bool:
+        """Delete a credential from Supabase Vault."""
+        from sqlalchemy import text
+
+        name = self._secret_name(tenant_id, connector_id)
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text("DELETE FROM vault.secrets WHERE name = :name"),
+                {"name": name},
+            )
+            await session.commit()
+            return result.rowcount > 0
+
+
+def get_vault(use_supabase: bool = False, session_factory: object = None) -> OAuthVault | SupabaseVault:
+    """Factory: returns SupabaseVault for production, OAuthVault for dev/test."""
+    if use_supabase and session_factory:
+        return SupabaseVault(session_factory)
+    return OAuthVault()
+
+
+# Singleton — in-memory for dev/test
 oauth_vault = OAuthVault()

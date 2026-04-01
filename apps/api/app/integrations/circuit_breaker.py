@@ -118,3 +118,106 @@ class CircuitBreaker:
             total_requests=self._total_requests,
             total_failures=self._total_failures,
         )
+
+
+class RedisCircuitBreaker:
+    """Redis-backed circuit breaker for cross-process state sharing.
+
+    Uses HSET/HGETALL on key `cb:{name}` with 24h TTL.
+    Falls back gracefully if Redis is unavailable.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        redis_client: object,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 30.0,
+    ) -> None:
+        self.name = name
+        self._redis = redis_client
+        self._key = f"cb:{name}"
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+
+    async def _get_state(self) -> dict[str, str]:
+        """Read full state from Redis hash."""
+        data = await self._redis.hgetall(self._key)
+        if not data:
+            return {
+                "state": "closed", "failure_count": "0",
+                "last_failure_time": "0", "last_success_time": "0",
+                "total_requests": "0", "total_failures": "0",
+            }
+        return {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in data.items()}
+
+    async def _set_fields(self, **fields: str) -> None:
+        """Write fields to Redis hash with 24h TTL."""
+        await self._redis.hset(self._key, mapping={k: str(v) for k, v in fields.items()})
+        await self._redis.expire(self._key, 86400)
+
+    @property
+    async def state(self) -> CircuitState:
+        """Get current state, auto-transitioning OPEN → HALF_OPEN after timeout."""
+        data = await self._get_state()
+        current = CircuitState(data.get("state", "closed"))
+        if current == CircuitState.OPEN:
+            last_fail = float(data.get("last_failure_time", "0"))
+            if last_fail > 0 and (time.monotonic() - last_fail) >= self.recovery_timeout:
+                await self._set_fields(state="half_open")
+                return CircuitState.HALF_OPEN
+        return current
+
+    async def can_execute(self) -> bool:
+        """Check if a request is allowed through the circuit."""
+        s = await self.state
+        return s in (CircuitState.CLOSED, CircuitState.HALF_OPEN)
+
+    async def record_success(self) -> None:
+        """Record a successful request."""
+        data = await self._get_state()
+        total = int(data.get("total_requests", "0")) + 1
+        current = CircuitState(data.get("state", "closed"))
+        new_state = "closed" if current == CircuitState.HALF_OPEN else data.get("state", "closed")
+        await self._set_fields(
+            state=new_state, failure_count="0",
+            last_success_time=str(time.monotonic()),
+            total_requests=str(total),
+        )
+
+    async def record_failure(self) -> None:
+        """Record a failed request."""
+        data = await self._get_state()
+        failures = int(data.get("failure_count", "0")) + 1
+        total_req = int(data.get("total_requests", "0")) + 1
+        total_fail = int(data.get("total_failures", "0")) + 1
+        current = CircuitState(data.get("state", "closed"))
+
+        if current == CircuitState.HALF_OPEN:
+            new_state = "open"
+        elif current == CircuitState.CLOSED and failures >= self.failure_threshold:
+            new_state = "open"
+        else:
+            new_state = data.get("state", "closed")
+
+        await self._set_fields(
+            state=new_state, failure_count=str(failures),
+            last_failure_time=str(time.monotonic()),
+            total_requests=str(total_req), total_failures=str(total_fail),
+        )
+
+    async def reset(self) -> None:
+        """Force reset to closed state."""
+        await self._set_fields(state="closed", failure_count="0", last_failure_time="0")
+
+    async def get_status(self) -> CircuitBreakerStatus:
+        """Get current status for inspection."""
+        data = await self._get_state()
+        return CircuitBreakerStatus(
+            state=CircuitState(data.get("state", "closed")),
+            failure_count=int(data.get("failure_count", "0")),
+            last_failure_time=float(data.get("last_failure_time", "0")) or None,
+            last_success_time=float(data.get("last_success_time", "0")) or None,
+            total_requests=int(data.get("total_requests", "0")),
+            total_failures=int(data.get("total_failures", "0")),
+        )

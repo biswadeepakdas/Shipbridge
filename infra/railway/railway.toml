@@ -13,4 +13,4 @@ start_command = "cd apps/api && celery -A app.workers worker --loglevel=info"
 
 [service.temporal-worker]
 build_command = "cd apps/api && pip install -r requirements.txt"
-start_command = "cd apps/api && python -m app.workers.temporal_workflows"
+start_command = "cd apps/api && python -m app.workers"

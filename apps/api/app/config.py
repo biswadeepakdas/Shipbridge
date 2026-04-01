@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     web_base_url: str = "http://localhost:3000"
 
+    # Temporal deployment mode
+    use_temporal: bool = False  # Set USE_TEMPORAL=true to route deployments through Temporal
+
     # GitHub App
     github_app_id: str = ""
     github_webhook_secret: str = ""

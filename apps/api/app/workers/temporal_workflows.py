@@ -388,3 +388,43 @@ class StagedDeploymentTemporalWorkflow:
                     return {"status": "rolled_back", "stage": stage.value}
 
         return {"status": "complete", "project_id": project_id}
+
+
+# --- Temporal Deployment Client (used by API router when USE_TEMPORAL=true) ---
+
+class TemporalDeploymentClient:
+    """Thin wrapper that starts Temporal workflows for deployments."""
+
+    def __init__(self) -> None:
+        self._client = None
+
+    async def _get_client(self):
+        """Lazy-connect to Temporal server."""
+        if self._client is None:
+            from temporalio.client import Client
+            settings = get_settings()
+            self._client = await Client.connect(
+                settings.temporal_host, namespace=settings.temporal_namespace,
+            )
+        return self._client
+
+    async def start_deployment(self, project_id: str, tenant_id: str, readiness_score: int) -> str:
+        """Start a Temporal deployment workflow. Returns workflow ID."""
+        client = await self._get_client()
+        wf_id = f"deploy-{project_id}-{uuid.uuid4().hex[:8]}"
+        handle = await client.start_workflow(
+            StagedDeploymentTemporalWorkflow.run,
+            args=[project_id, tenant_id, readiness_score],
+            id=wf_id,
+            task_queue=TASK_QUEUE,
+        )
+        return handle.id
+
+    async def get_result(self, workflow_id: str) -> dict:
+        """Get the result of a completed workflow."""
+        client = await self._get_client()
+        handle = client.get_workflow_handle(workflow_id)
+        return await handle.result()
+
+
+temporal_deployment_client = TemporalDeploymentClient()

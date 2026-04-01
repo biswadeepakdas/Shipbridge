@@ -340,3 +340,102 @@ def assemble_context(
                tokens=token_estimate, intent=intent.intent.value, duration_ms=round(duration_ms, 2))
 
     return context
+
+
+# --- Production Retrieval (real pgvector + tsvector) ---
+# These async functions are used when environment == "production".
+# The sync simulated functions above remain the default for dev/test.
+
+async def async_dense_retrieval(query: str, tenant_id: str, top_k: int = 10) -> list[RetrievalChunk]:
+    """Real pgvector cosine similarity search using embeddings."""
+    from app.db import async_session
+    from app.os_layer.embedding_service import get_embedding_service
+    from sqlalchemy import text
+
+    service = get_embedding_service()
+    [query_embedding] = await service.embed([query])
+    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+    async with async_session() as session:
+        result = await session.execute(
+            text("""
+                SELECT chunk_id, content, source, 1 - (embedding <=> :emb::vector) as score
+                FROM document_embeddings
+                WHERE tenant_id = :tid
+                ORDER BY embedding <=> :emb::vector
+                LIMIT :k
+            """),
+            {"emb": embedding_str, "tid": tenant_id, "k": top_k},
+        )
+        rows = result.fetchall()
+
+    return [
+        RetrievalChunk(chunk_id=r[0], content=r[1], source=r[2], score=round(float(r[3]), 3), retrieval_method="dense")
+        for r in rows
+    ]
+
+
+async def async_sparse_retrieval(query: str, tenant_id: str, top_k: int = 10) -> list[RetrievalChunk]:
+    """Real PostgreSQL ts_rank full-text search with GIN index."""
+    from app.db import async_session
+    from sqlalchemy import text
+
+    async with async_session() as session:
+        result = await session.execute(
+            text("""
+                SELECT chunk_id, content, source,
+                       ts_rank(content_tsv, plainto_tsquery('english', :q)) as score
+                FROM document_embeddings
+                WHERE tenant_id = :tid AND content_tsv @@ plainto_tsquery('english', :q)
+                ORDER BY score DESC
+                LIMIT :k
+            """),
+            {"q": query, "tid": tenant_id, "k": top_k},
+        )
+        rows = result.fetchall()
+
+    return [
+        RetrievalChunk(chunk_id=r[0], content=r[1], source=r[2], score=round(float(r[3]), 3), retrieval_method="sparse")
+        for r in rows
+    ]
+
+
+async def async_assemble_context(
+    query: str,
+    tenant_id: str,
+    top_k: int = 5,
+) -> AssembledContext:
+    """Production context assembly using real pgvector + tsvector."""
+    start = time.monotonic()
+    intent = classify_intent(query)
+
+    dense_results: list[RetrievalChunk] = []
+    sparse_results: list[RetrievalChunk] = []
+
+    if intent.intent in (RetrievalIntent.SEMANTIC, RetrievalIntent.HYBRID):
+        dense_results = await async_dense_retrieval(query, tenant_id, top_k=top_k * 2)
+
+    if intent.intent in (RetrievalIntent.STRUCTURED, RetrievalIntent.HYBRID, RetrievalIntent.LIVE):
+        sparse_results = await async_sparse_retrieval(query, tenant_id, top_k=top_k * 2)
+
+    if dense_results and sparse_results:
+        chunks = reciprocal_rank_fusion(dense_results, sparse_results)[:top_k]
+    elif dense_results:
+        chunks = dense_results[:top_k]
+    elif sparse_results:
+        chunks = sparse_results[:top_k]
+    else:
+        chunks = []
+
+    total_chars = sum(len(c.content) for c in chunks)
+    duration_ms = (time.monotonic() - start) * 1000
+
+    trace = RetrievalTrace(
+        intent=intent, dense_results=len(dense_results), sparse_results=len(sparse_results),
+        fused_results=len(chunks), cache_hit=False, retrieval_time_ms=round(duration_ms, 2),
+    )
+
+    return AssembledContext(
+        query=query, chunks=chunks, total_tokens_estimate=total_chars // 4,
+        retrieval_trace=trace, assembled_at=datetime.now(timezone.utc).isoformat(),
+    )
