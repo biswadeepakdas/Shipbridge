@@ -20,6 +20,7 @@ from app.routers.evals import router as evals_router
 from app.routers.github import router as github_router
 from app.routers.health import router as health_router
 from app.routers.projects import router as projects_router
+from app.routers.rules import router as rules_router
 
 logger = structlog.get_logger()
 
@@ -81,4 +82,5 @@ app.include_router(projects_router)
 app.include_router(evals_router)
 app.include_router(connectors_router)
 app.include_router(costs_router)
+app.include_router(rules_router)
 app.include_router(github_router)
