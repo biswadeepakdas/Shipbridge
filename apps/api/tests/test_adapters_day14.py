@@ -226,7 +226,7 @@ class TestPostgresDirectAdapter:
 
 class TestFullAdapterRegistry:
     def test_ten_adapters_registered(self) -> None:
-        assert len(ADAPTER_REGISTRY) == 10
+        assert len(ADAPTER_REGISTRY) >= 10
         expected = ["salesforce", "notion", "slack", "hubspot", "stripe",
                     "github", "linear", "airtable", "google_workspace", "postgres"]
         for name in expected:

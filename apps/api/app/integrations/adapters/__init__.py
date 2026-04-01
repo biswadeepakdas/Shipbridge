@@ -1,6 +1,7 @@
-"""Connector adapters — 10 implementations of ConnectorAdapter."""
+"""Connector adapters — 11 implementations of ConnectorAdapter."""
 
 from app.integrations.adapters.airtable import AirtableAdapter
+from app.integrations.adapters.composio_proxy import ComposioProxyAdapter
 from app.integrations.adapters.github_adapter import GitHubAdapter
 from app.integrations.adapters.google_workspace import GoogleWorkspaceAdapter
 from app.integrations.adapters.hubspot import HubSpotAdapter
@@ -22,11 +23,13 @@ ADAPTER_REGISTRY: dict[str, type] = {
     "airtable": AirtableAdapter,
     "google_workspace": GoogleWorkspaceAdapter,
     "postgres": PostgresDirectAdapter,
+    "composio": ComposioProxyAdapter,
 }
 
 __all__ = [
     "ADAPTER_REGISTRY",
     "AirtableAdapter",
+    "ComposioProxyAdapter",
     "GitHubAdapter",
     "GoogleWorkspaceAdapter",
     "HubSpotAdapter",

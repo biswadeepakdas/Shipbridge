@@ -1,1 +1,1 @@
-"""Os_layer module — stub for Day 1."""
+"""Integration OS sub-systems — normalization rules, event processing, context assembly."""
