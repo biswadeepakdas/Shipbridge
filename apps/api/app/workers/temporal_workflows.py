@@ -309,5 +309,82 @@ class DeploymentEngine:
         self._workflows.clear()
 
 
-# Singleton
+# Singleton (in-memory engine for dev/test)
 deployment_engine = DeploymentEngine()
+
+
+# --- Temporal SDK Wiring (production) ---
+# These decorated versions mirror the in-memory activities above.
+# In production, a Temporal worker process runs these with durable checkpointing.
+
+from temporalio import activity, workflow
+from datetime import timedelta
+
+
+@activity.defn
+async def check_readiness_gate_activity(readiness_score: int) -> dict:
+    """Temporal activity: check readiness gate."""
+    passed, message = check_readiness_gate(readiness_score)
+    return {"passed": passed, "message": message}
+
+
+@activity.defn
+async def execute_stage_activity(stage_name: str, inject_regression: bool = False) -> dict:
+    """Temporal activity: execute a deployment stage and collect metrics."""
+    stage = DeployStage(stage_name)
+    metrics = simulate_stage_metrics(stage, inject_regression)
+    return metrics.model_dump()
+
+
+@activity.defn
+async def rollback_activity(workflow_id: str, stage_name: str, reason: str) -> dict:
+    """Temporal activity: rollback a deployment stage."""
+    return {"workflow_id": workflow_id, "stage": stage_name, "reason": reason, "action": "rollback"}
+
+
+@workflow.defn
+class StagedDeploymentTemporalWorkflow:
+    """Temporal workflow: 4-stage deployment with durable checkpointing.
+
+    Runs as: sandbox → canary5 → canary25 → production
+    Each stage: gate check → execute → metrics → auto-rollback check → advance
+    """
+
+    @workflow.run
+    async def run(self, project_id: str, tenant_id: str, readiness_score: int) -> dict:
+        """Execute the full staged deployment pipeline."""
+        # Step 1: Gate check
+        gate_result = await workflow.execute_activity(
+            check_readiness_gate_activity,
+            readiness_score,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        if not gate_result["passed"]:
+            return {"status": "failed", "reason": gate_result["message"]}
+
+        # Step 2: Execute stages
+        baseline_metrics: dict | None = None
+        for stage in STAGE_ORDER:
+            stage_result = await workflow.execute_activity(
+                execute_stage_activity,
+                stage.value,
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+
+            # Capture sandbox as baseline
+            if stage == DeployStage.SANDBOX:
+                baseline_metrics = stage_result
+
+            # Auto-rollback check (compare against baseline)
+            if baseline_metrics and stage != DeployStage.SANDBOX:
+                baseline_success = baseline_metrics.get("task_success_rate", 1.0)
+                current_success = stage_result.get("task_success_rate", 0.0)
+                if baseline_success - current_success > 0.05:
+                    await workflow.execute_activity(
+                        rollback_activity,
+                        args=["", stage.value, f"Success dropped {baseline_success - current_success:.1%}"],
+                        start_to_close_timeout=timedelta(seconds=30),
+                    )
+                    return {"status": "rolled_back", "stage": stage.value}
+
+        return {"status": "complete", "project_id": project_id}

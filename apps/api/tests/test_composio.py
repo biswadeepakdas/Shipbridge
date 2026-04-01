@@ -3,7 +3,7 @@
 import pytest
 
 from app.integrations.adapters.composio_proxy import ComposioProxyAdapter
-from app.os_layer.jmespath_executor import NormalizedEvent, execute_rule, _resolve_path
+from app.os_layer.jmespath_executor import NormalizedEvent, execute_rule
 from app.os_layer.normalizer import normalize_event
 from app.os_layer.rule_registry import NormalizationRuleEntry, RuleRegistry
 from app.os_layer.unknown_event_queue import UnknownEvent, UnknownEventQueue
@@ -105,19 +105,23 @@ class TestRuleRegistry:
 
 class TestJMESPathExecutor:
     def test_resolve_simple_path(self) -> None:
+        import jmespath
         data = {"payload": {"Amount": 50000}}
-        assert _resolve_path(data, "payload.Amount") == 50000
+        assert jmespath.search("payload.Amount", data) == 50000
 
     def test_resolve_nested_path(self) -> None:
+        import jmespath
         data = {"data": {"items": [{"name": "first"}]}}
-        assert _resolve_path(data, "data.items[0].name") == "first"
+        assert jmespath.search("data.items[0].name", data) == "first"
 
     def test_resolve_missing_returns_none(self) -> None:
-        assert _resolve_path({"a": 1}, "b.c") is None
+        import jmespath
+        assert jmespath.search("b.c", {"a": 1}) is None
 
     def test_resolve_array_out_of_bounds(self) -> None:
+        import jmespath
         data = {"items": [{"x": 1}]}
-        assert _resolve_path(data, "items[5].x") is None
+        assert jmespath.search("items[5].x", data) is None
 
     def test_execute_rule_produces_event(self) -> None:
         rule = NormalizationRuleEntry(

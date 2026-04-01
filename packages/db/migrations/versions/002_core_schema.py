@@ -139,9 +139,33 @@ def upgrade() -> None:
     op.create_index("ix_event_subscriptions_tenant_id", "event_subscriptions", ["tenant_id"])
     op.create_index("ix_event_subscriptions_event_type", "event_subscriptions", ["event_type"])
 
+    # Row Level Security — enforce tenant isolation at the database level
+    # RLS policies use current_setting('app.current_tenant') set by the application
+    # before each request via SET LOCAL app.current_tenant = '<tenant_uuid>';
+    rls_tables = [
+        "projects", "assessment_runs", "connectors",
+        "connector_health", "normalization_rules",
+        "agent_events", "event_subscriptions",
+    ]
+    for table in rls_tables:
+        op.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")
+        op.execute(f"""
+            CREATE POLICY tenant_isolation_policy ON {table}
+            USING (tenant_id = current_setting('app.current_tenant', true)::uuid);
+        """)
+
 
 def downgrade() -> None:
     """Drop core domain tables."""
+    # Remove RLS policies first
+    rls_tables = [
+        "event_subscriptions", "agent_events", "normalization_rules",
+        "connector_health", "connectors", "assessment_runs", "projects",
+    ]
+    for table in rls_tables:
+        op.execute(f"DROP POLICY IF EXISTS tenant_isolation_policy ON {table};")
+        op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY;")
+
     op.drop_table("event_subscriptions")
     op.drop_table("agent_events")
     op.drop_table("normalization_rules")
