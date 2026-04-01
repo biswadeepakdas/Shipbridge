@@ -1,1 +1,1 @@
-"""Governance module — stub for Day 1."""
+"""Governance toolkit — audit trail, HITL gates, compliance."""
