@@ -27,6 +27,7 @@ from app.routers.rules import router as rules_router
 from app.routers.subscriptions import router as subscriptions_router
 from app.routers.webhooks import router as webhooks_router
 from app.routers.websocket import router as websocket_router # Import the new websocket router
+from app.routers.audit import router as audit_router  # Chain-of-thought audit trail
 
 logger = structlog.get_logger()
 
@@ -69,6 +70,8 @@ app = FastAPI(
 app.add_middleware(RequestLoggingMiddleware)
 from app.middleware.rate_limit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
+from app.middleware.guardrails import GuardrailsMiddleware
+app.add_middleware(GuardrailsMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().web_base_url],
@@ -100,3 +103,4 @@ app.include_router(subscriptions_router)
 app.include_router(webhooks_router)
 app.include_router(github_router)
 app.include_router(websocket_router) # Include the new websocket router
+app.include_router(audit_router)  # Chain-of-thought audit trail

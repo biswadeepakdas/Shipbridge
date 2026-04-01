@@ -240,3 +240,78 @@ def project_costs(
         routing_recommendation=rec,
         monthly_baseline=projections[0].effective_cost if projections else 0.0,
     )
+
+
+# ─── Budget Caps, Spend Tracking & Intelligent Model Routing ─────────────────
+
+MODEL_PRICING = {
+    "gpt-4o":           {"prompt": 0.005,    "completion": 0.015},
+    "gpt-4o-mini":      {"prompt": 0.00015,  "completion": 0.0006},
+    "gemini-2.5-flash": {"prompt": 0.000075, "completion": 0.0003},
+}
+
+
+class CostModeler:
+    """Tracks real-time spend, enforces budget caps, and routes to cost-optimal models."""
+
+    async def record_usage(self, redis_client, tenant_id: str, project_id: str,
+                           prompt_tokens: int, completion_tokens: int, model: str):
+        """Records token usage and increments spend counters in Redis."""
+        from datetime import datetime
+        pricing = MODEL_PRICING.get(model, MODEL_PRICING["gpt-4o-mini"])
+        cost = (prompt_tokens / 1000 * pricing["prompt"]) + (completion_tokens / 1000 * pricing["completion"])
+        now = datetime.utcnow()
+        month_key = f"spend:{tenant_id}:{project_id}:{now.strftime('%Y-%m')}"
+        day_key   = f"spend:{tenant_id}:{project_id}:{now.strftime('%Y-%m-%d')}"
+        await redis_client.incrbyfloat(month_key, cost)
+        await redis_client.incrbyfloat(day_key, cost)
+        return cost
+
+    async def check_budget(self, redis_client, tenant_id: str, project_id: str,
+                           monthly_limit: float) -> bool:
+        """Returns False if the monthly budget has been exceeded, True otherwise."""
+        from datetime import datetime
+        month_key = f"spend:{tenant_id}:{project_id}:{datetime.utcnow().strftime('%Y-%m')}"
+        current = await redis_client.get(month_key)
+        if current is None:
+            return True
+        return float(current) < monthly_limit
+
+    async def get_spend_summary(self, redis_client, tenant_id: str, project_id: str) -> dict:
+        """Returns current month spend, daily breakdown, and projected end-of-month spend."""
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        month_key = f"spend:{tenant_id}:{project_id}:{now.strftime('%Y-%m')}"
+        current_raw = await redis_client.get(month_key)
+        current_month = float(current_raw) if current_raw else 0.0
+
+        daily = {}
+        for i in range(7):
+            day = now - timedelta(days=i)
+            day_key = f"spend:{tenant_id}:{project_id}:{day.strftime('%Y-%m-%d')}"
+            val = await redis_client.get(day_key)
+            daily[day.strftime("%Y-%m-%d")] = float(val) if val else 0.0
+
+        days_elapsed = now.day
+        projected = (current_month / days_elapsed * 30) if days_elapsed > 0 else 0.0
+
+        return {
+            "current_month_spend": round(current_month, 6),
+            "daily_breakdown": daily,
+            "projected_month_end": round(projected, 6),
+        }
+
+    def select_model(self, prompt: str, budget_remaining: float) -> str:
+        """Selects the most cost-effective model based on prompt complexity and remaining budget."""
+        try:
+            import tiktoken
+            enc = tiktoken.encoding_for_model("gpt-4o")
+            token_count = len(enc.encode(prompt))
+        except Exception:
+            token_count = int(len(prompt.split()) * 1.3)
+
+        if budget_remaining < 0.10:
+            return "gemini-2.5-flash"
+        if token_count >= 500 and budget_remaining > 1.00:
+            return "gpt-4o"
+        return "gpt-4o-mini"

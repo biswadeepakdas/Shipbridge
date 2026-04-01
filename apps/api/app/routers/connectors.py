@@ -210,3 +210,67 @@ async def delete_connector(
     await db.commit()
 
     return APIResponse(data={"deleted": connector_id})
+
+
+# ─── Marketplace Registry ─────────────────────────────────────────────────────
+# These endpoints power the community connector marketplace, enabling tenants
+# to publish, discover, and install shared connectors.
+
+class MarketplaceConnectorPublish(BaseModel):
+    """Request to publish a connector to the marketplace."""
+    name: str
+    description: str
+    category: str
+    author_tenant_id: str
+    connector_code_url: str
+
+
+@router.get("/marketplace")
+async def list_marketplace_connectors(request: Request):
+    """Returns all published connectors from the community marketplace."""
+    redis = request.app.state.redis
+    connector_ids = await redis.smembers("connector:all")
+    connectors = []
+    for cid in connector_ids:
+        cid_str = cid.decode() if isinstance(cid, bytes) else cid
+        data = await redis.hgetall(f"connector:{cid_str}")
+        if data:
+            connectors.append({
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()
+            })
+    return {"connectors": connectors, "total": len(connectors)}
+
+
+@router.post("/marketplace/publish")
+async def publish_marketplace_connector(payload: MarketplaceConnectorPublish, request: Request):
+    """Publishes a new connector to the community marketplace."""
+    import uuid as _uuid
+    redis = request.app.state.redis
+    connector_id = str(_uuid.uuid4())
+    connector_data = {
+        "id": connector_id,
+        "name": payload.name,
+        "description": payload.description,
+        "category": payload.category,
+        "author_tenant_id": payload.author_tenant_id,
+        "connector_code_url": payload.connector_code_url,
+        "install_count": "0",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await redis.hset(f"connector:{connector_id}", mapping=connector_data)
+    await redis.sadd("connector:all", connector_id)
+    return connector_data
+
+
+@router.post("/marketplace/{connector_id}/install")
+async def install_marketplace_connector(connector_id: str, request: Request):
+    """Increments the install count for a marketplace connector."""
+    redis = request.app.state.redis
+    key = f"connector:{connector_id}"
+    exists = await redis.exists(key)
+    if not exists:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Marketplace connector not found")
+    new_count = await redis.hincrby(key, "install_count", 1)
+    return {"success": True, "connector_id": connector_id, "install_count": new_count}

@@ -79,3 +79,12 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         Index("ix_knowledge_chunks_tsv", "tsv_content", postgresql_using="gin"),
     )
+
+# SLA and budget fields added by strategic implementation
+
+    # SLA enforcement fields (Agent 1 — Reliability)
+    sla_max_latency_ms = Column(Float, nullable=True)
+    sla_max_cost_per_call = Column(Float, nullable=True)
+    sla_max_hallucination_rate = Column(Float, nullable=True)
+    # Budget cap (Agent 3 — Enterprise Trust)
+    monthly_budget_limit = Column(Float, nullable=True, default=None)
