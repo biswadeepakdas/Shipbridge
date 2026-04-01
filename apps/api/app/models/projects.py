@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, Index
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, Index, Column, Float
 from sqlalchemy.dialects.postgresql import JSON, UUID, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
@@ -82,9 +82,9 @@ class KnowledgeChunk(Base):
 
 # SLA and budget fields added by strategic implementation
 
-    # SLA enforcement fields (Agent 1 — Reliability)
-    sla_max_latency_ms = Column(Float, nullable=True)
-    sla_max_cost_per_call = Column(Float, nullable=True)
-    sla_max_hallucination_rate = Column(Float, nullable=True)
-    # Budget cap (Agent 3 — Enterprise Trust)
-    monthly_budget_limit = Column(Float, nullable=True, default=None)
+# SLA enforcement fields (Agent 1 — Reliability)
+Project.sla_max_latency_ms = Column(Float, nullable=True)
+Project.sla_max_cost_per_call = Column(Float, nullable=True)
+Project.sla_max_hallucination_rate = Column(Float, nullable=True)
+# Budget cap (Agent 3 — Enterprise Trust)
+Project.monthly_budget_limit = Column(Float, nullable=True, default=None)

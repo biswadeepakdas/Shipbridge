@@ -50,6 +50,17 @@ const NAV_ITEMS = [
       </svg>
     ),
   },
+  {
+    href: "/dashboard/rules",
+    label: "HITL Gate",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+        <path d="M9 2v5M9 11v5" />
+        <circle cx="9" cy="9" r="2.5" />
+        <path d="M2 9h4.5M11.5 9H16" />
+      </svg>
+    ),
+  },
 ];
 
 interface SidebarProps {

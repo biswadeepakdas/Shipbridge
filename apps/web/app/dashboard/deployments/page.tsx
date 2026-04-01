@@ -2,12 +2,14 @@
 
 "use client";
 
+import { useState, useCallback } from "react";
 import Header from "@/components/dashboard/header";
 import PageTransition from "@/components/dashboard/page-transition";
 import StageTrack from "@/components/deploy/stage-track";
 import CanaryMetrics from "@/components/deploy/canary-metrics";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
+import { useShipBridgeSocket } from "@/hooks/useShipBridgeSocket";
 
 const MOCK_STAGES = [
   { name: "sandbox", label: "Sandbox", trafficPct: 0, status: "complete" as const },
@@ -36,9 +38,42 @@ const STATUS_MAP: Record<string, { status: "ok" | "warn" | "bad"; label: string 
 };
 
 export default function DeploymentsPage() {
+  const [stages, setStages] = useState(MOCK_STAGES);
+  const [metrics, setMetrics] = useState(MOCK_METRICS);
+  const [liveStatus, setLiveStatus] = useState<"in progress" | "complete" | "rolled back">("in progress");
+
+  const { connected } = useShipBridgeSocket({
+    tenantId: "demo-tenant",
+    onEvent: useCallback((event) => {
+      if (event.type === "deployment_stage_update") {
+        setStages((prev) =>
+          prev.map((s) =>
+            s.name === event.stage
+              ? { ...s, status: event.status as "complete" | "active" | "pending" | "failed" }
+              : s
+          )
+        );
+        if (event.status === "complete" && event.stage === "production") {
+          setLiveStatus("complete");
+        }
+      }
+    }, []),
+  });
+
   return (
     <PageTransition pageKey="deployments">
-      <Header title="Deployments" subtitle="Staged deployment pipeline" />
+      <Header
+        title="Deployments"
+        subtitle="Staged deployment pipeline"
+        actions={
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: connected ? T.ok : T.t4 }} />
+            <span style={{ fontFamily: FONT.label, fontSize: 10, color: T.t3, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              {connected ? "live" : "offline"}
+            </span>
+          </div>
+        }
+      />
       <div style={{ padding: "24px" }}>
         {/* Active deployment */}
         <div style={{
@@ -51,12 +86,12 @@ export default function DeploymentsPage() {
             </h3>
             <StatusTag status="ok" label="in progress" />
           </div>
-          <StageTrack stages={MOCK_STAGES} />
+          <StageTrack stages={stages} />
         </div>
 
         {/* Canary metrics */}
         <div style={{ marginBottom: "20px" }}>
-          <CanaryMetrics metrics={MOCK_METRICS} health="healthy" />
+          <CanaryMetrics metrics={metrics} health="healthy" />
         </div>
 
         {/* Manual controls */}

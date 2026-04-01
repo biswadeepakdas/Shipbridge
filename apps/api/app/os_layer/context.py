@@ -106,6 +106,21 @@ class ContextAssemblySubsystem:
         payload = f"{tenant_id}:{query}:{limit}"
         return f"context:cache:{hashlib.sha256(payload.encode()).hexdigest()}"
 
+
+    async def _write_audit_trail(self, tenant_id: str, project_id: str, query: str, chunks: list, model: str, tokens: dict):
+        """Writes an audit trail entry to Redis."""
+        import json
+        from datetime import datetime
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "query": query,
+            "retrieved_chunks": [c.id for c in chunks],
+            "model_used": model,
+            "tokens": tokens
+        }
+        key = f"audit:{tenant_id}:{project_id}"
+        await self.redis.lpush(key, json.dumps(entry))
+        await self.redis.ltrim(key, 0, 999)  # Keep last 1000 entries
     async def assemble_context(
         self, 
         tenant_id: uuid.UUID, 

@@ -1,3 +1,7 @@
+
+class BudgetExceededError(Exception):
+    """Raised when a project exceeds its monthly budget cap."""
+    pass
 """Cost + Token Modeler — pricing, routing optimization, scale projections, cache estimation."""
 
 from pydantic import BaseModel

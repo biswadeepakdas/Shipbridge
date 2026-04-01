@@ -100,9 +100,45 @@ export default function OverviewPage() {
     };
   }, []);
 
+  const handleDownloadPDF = useCallback(async () => {
+    // In production: GET /api/v1/governance/pdf/{projectId}/download
+    const projectId = "demo-project-id";
+    const response = await fetch(`/api/v1/governance/pdf/${projectId}/download`);
+    if (response.ok) {
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `shipbridge-compliance-${projectId}.pdf`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }
+  }, []);
+
   return (
     <PageTransition pageKey="overview">
-      <Header title="Overview" subtitle="Production readiness assessment" />
+      <Header
+        title="Overview"
+        subtitle="Production readiness assessment"
+        actions={
+          <button
+            type="button"
+            onClick={handleDownloadPDF}
+            style={{
+              padding: "8px 14px", borderRadius: "6px",
+              border: `1px solid ${T.b2}`, backgroundColor: "transparent",
+              color: T.t2, fontFamily: FONT.ui, fontSize: 12,
+              cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+              <path d="M6.5 1v8M3.5 6.5l3 3 3-3" />
+              <path d="M1 10.5v1a.5.5 0 00.5.5h10a.5.5 0 00.5-.5v-1" />
+            </svg>
+            Compliance PDF
+          </button>
+        }
+      />
       <div style={{ padding: "24px" }}>
         {/* Score + summary row */}
         <div
