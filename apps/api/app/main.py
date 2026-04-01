@@ -14,6 +14,7 @@ from app.middleware.request_logging import RequestLoggingMiddleware
 from app.middleware.sentry import setup_sentry
 from app.middleware.telemetry import setup_telemetry
 from app.routers.auth import router as auth_router
+from app.routers.billing import router as billing_router
 from app.routers.connectors import router as connectors_router
 from app.routers.context import router as context_router
 from app.routers.costs import router as costs_router
@@ -85,6 +86,7 @@ app.add_exception_handler(AppError, app_error_handler)
 # Routers
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(billing_router)
 app.include_router(projects_router)
 app.include_router(evals_router)
 app.include_router(connectors_router)
