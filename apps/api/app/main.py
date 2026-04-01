@@ -23,6 +23,7 @@ from app.routers.evals import router as evals_router
 from app.routers.github import router as github_router
 from app.routers.governance import router as governance_router
 from app.routers.health import router as health_router
+from app.routers.onboarding import router as onboarding_router
 from app.routers.projects import router as projects_router
 from app.routers.rules import router as rules_router
 from app.routers.subscriptions import router as subscriptions_router
@@ -87,6 +88,7 @@ app.add_exception_handler(AppError, app_error_handler)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(onboarding_router)
 app.include_router(projects_router)
 app.include_router(evals_router)
 app.include_router(connectors_router)
