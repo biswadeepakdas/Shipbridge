@@ -39,6 +39,11 @@ async def setup_db() -> AsyncGenerator[None, None]:
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Reset rate limiter between tests to prevent 429s
+    from app.middleware.rate_limit import rate_limiter
+    rate_limiter.reset()
+
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
