@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from anthropic import Anthropic
 from redis.asyncio import Redis
 
-from app.os_layer.rule_registry import NormalizationRuleEntry, RuleRegistry
+from app.os_layer.rule_registry import NormalizationRule
+from app.services.cost_modeler import CostModelerEntry, RuleRegistry
 from app.os_layer.unknown_event_queue import UnknownEvent, UnknownEventQueue
 from app.config import get_settings
 
