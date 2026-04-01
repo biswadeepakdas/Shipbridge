@@ -22,6 +22,7 @@ from app.routers.github import router as github_router
 from app.routers.health import router as health_router
 from app.routers.projects import router as projects_router
 from app.routers.rules import router as rules_router
+from app.routers.subscriptions import router as subscriptions_router
 from app.routers.webhooks import router as webhooks_router
 
 logger = structlog.get_logger()
@@ -86,5 +87,6 @@ app.include_router(connectors_router)
 app.include_router(context_router)
 app.include_router(costs_router)
 app.include_router(rules_router)
+app.include_router(subscriptions_router)
 app.include_router(webhooks_router)
 app.include_router(github_router)
