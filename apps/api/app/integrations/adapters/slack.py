@@ -1,10 +1,14 @@
-"""SlackAdapter — Bot token auth, normalize messages/threads/channel info."""
-
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, List, Optional
+
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+import structlog
 
 from app.integrations.adapter import ConnectorAdapter, ConnectorHealthResult, NormalizedData
+
+logger = structlog.get_logger()
 
 
 class SlackAdapter(ConnectorAdapter):
@@ -14,6 +18,7 @@ class SlackAdapter(ConnectorAdapter):
 
     def __init__(self, bot_token: str = "") -> None:
         self.bot_token = bot_token
+        self.client = WebClient(token=bot_token)
 
     async def fetch(self, query: dict) -> dict[str, Any]:
         """Fetch data from Slack API.
@@ -23,52 +28,44 @@ class SlackAdapter(ConnectorAdapter):
         """
         query_type = query.get("type", "messages")
 
-        simulated: dict[str, dict] = {
-            "messages": {
-                "ok": True,
-                "type": "messages",
-                "channel": query.get("channel", "C01GENERAL"),
-                "messages": [
-                    {"user": "U001", "user_name": "alice", "text": "Deployed v2.3 to staging. All tests green.",
-                     "ts": "1711900000.000100", "type": "message"},
-                    {"user": "U002", "user_name": "bob", "text": "LGTM, promoting to production.",
-                     "ts": "1711900060.000200", "type": "message"},
-                    {"user": "U003", "user_name": "carol", "text": "Monitoring dashboards look stable after 30min.",
-                     "ts": "1711901800.000300", "type": "message"},
-                ],
-            },
-            "channels": {
-                "ok": True,
-                "type": "channels",
-                "channels": [
-                    {"id": "C01GENERAL", "name": "general", "num_members": 45, "topic": {"value": "Company-wide announcements"}},
-                    {"id": "C02ENGINEERING", "name": "engineering", "num_members": 18, "topic": {"value": "Engineering discussions"}},
-                    {"id": "C03DEPLOYS", "name": "deploys", "num_members": 12, "topic": {"value": "Deployment notifications"}},
-                ],
-            },
-            "thread": {
-                "ok": True,
-                "type": "thread",
-                "messages": [
-                    {"user": "U001", "user_name": "alice", "text": "Anyone seeing latency spikes on the API?",
-                     "ts": "1711900000.000100", "type": "message"},
-                    {"user": "U002", "user_name": "bob", "text": "Yes, p99 is at 800ms. Investigating.",
-                     "ts": "1711900120.000200", "type": "message", "thread_ts": "1711900000.000100"},
-                    {"user": "U002", "user_name": "bob", "text": "Found it — Redis connection pool exhaustion. Fix deployed.",
-                     "ts": "1711900300.000300", "type": "message", "thread_ts": "1711900000.000100"},
-                ],
-            },
-        }
-
-        return simulated.get(query_type, {"ok": True, "type": query_type, "messages": []})
+        try:
+            if query_type == "messages":
+                channel_id = query.get("channel")
+                if not channel_id: raise ValueError("Channel ID is required for fetching messages.")
+                response = await self.client.conversations_history(channel=channel_id)
+                return {"ok": True, "type": "messages", "channel": channel_id, "messages": response.get("messages", [])}
+            elif query_type == "channels":
+                response = await self.client.conversations_list(types="public_channel,private_channel")
+                return {"ok": True, "type": "channels", "channels": response.get("channels", [])}
+            elif query_type == "thread":
+                channel_id = query.get("channel")
+                thread_ts = query.get("thread_ts")
+                if not channel_id or not thread_ts: raise ValueError("Channel ID and thread_ts are required for fetching a thread.")
+                response = await self.client.conversations_replies(channel=channel_id, ts=thread_ts)
+                return {"ok": True, "type": "thread", "channel": channel_id, "messages": response.get("messages", [])}
+            else:
+                raise ValueError(f"Unsupported Slack query type: {query_type}")
+        except SlackApiError as e:
+            logger.error("slack_api_error", method=query_type, error=str(e))
+            raise
 
     async def health_check(self) -> ConnectorHealthResult:
-        """Check Slack API connectivity."""
+        """Check Slack API connectivity by calling auth.test."""
         start = time.monotonic()
-        latency = (time.monotonic() - start) * 1000 + 22.0
+        try:
+            response = await self.client.auth_test()
+            if response["ok"]:
+                status = "healthy"
+            else:
+                status = "unhealthy"
+                logger.error("slack_health_check_failed", error=response.get("error"))
+        except SlackApiError as e:
+            status = "unhealthy"
+            logger.error("slack_health_check_error", error=str(e))
+        latency = (time.monotonic() - start) * 1000
 
         return ConnectorHealthResult(
-            status="healthy",
+            status=status,
             latency_ms=round(latency, 2),
             checked_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -97,7 +94,7 @@ class SlackAdapter(ConnectorAdapter):
         lines = [f"# Slack {label} ({len(messages)} messages)\n"]
 
         for msg in messages:
-            user = msg.get("user_name", msg.get("user", "unknown"))
+            user = msg.get("user_name", msg.get("user", "unknown")) # Slack API might return user ID, need to fetch user info if desired
             text = msg.get("text", "")
             lines.append(f"**@{user}**: {text}")
 
@@ -117,7 +114,7 @@ class SlackAdapter(ConnectorAdapter):
 
         for ch in channels:
             name = ch.get("name", "unknown")
-            members = ch.get("num_members", 0)
+            members = ch.get("num_members", 0) # Slack API might not directly provide num_members in conversations_list
             topic = ch.get("topic", {}).get("value", "—")
             lines.append(f"| #{name} | {members} | {topic} |")
 
