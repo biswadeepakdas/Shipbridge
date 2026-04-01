@@ -17,6 +17,7 @@ from app.routers.auth import router as auth_router
 from app.routers.connectors import router as connectors_router
 from app.routers.context import router as context_router
 from app.routers.costs import router as costs_router
+from app.routers.deployments import router as deployments_router
 from app.routers.evals import router as evals_router
 from app.routers.github import router as github_router
 from app.routers.governance import router as governance_router
@@ -88,6 +89,7 @@ app.include_router(connectors_router)
 app.include_router(context_router)
 app.include_router(costs_router)
 app.include_router(governance_router)
+app.include_router(deployments_router)
 app.include_router(rules_router)
 app.include_router(subscriptions_router)
 app.include_router(webhooks_router)

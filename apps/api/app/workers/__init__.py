@@ -1,1 +1,1 @@
-"""Workers module — stub for Day 1."""
+"""Workers — Celery tasks and Temporal workflows."""
