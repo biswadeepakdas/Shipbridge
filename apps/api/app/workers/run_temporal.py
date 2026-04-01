@@ -1,58 +1,35 @@
-"""Temporal worker runner — connects to Temporal server, registers workflows + activities.
-
-Start with: python -m app.workers
-Or directly: python apps/api/app/workers/run_temporal.py
-"""
+"""Temporal worker entrypoint — registers workflows and activities."""
 
 import asyncio
-
-import structlog
+from temporalio.client import Client
+from temporalio.worker import Worker
 
 from app.config import get_settings
+from app.workers.temporal_workflows import StagedDeploymentWorkflow, DeploymentActivities
 
-logger = structlog.get_logger()
-
-TASK_QUEUE = "shipbridge-deployments"
-
-
-async def run_worker() -> None:
-    """Connect to Temporal and start the worker process."""
-    from temporalio.client import Client
-    from temporalio.worker import Worker
-
-    from app.workers.temporal_workflows import (
-        StagedDeploymentTemporalWorkflow,
-        check_readiness_gate_activity,
-        execute_stage_activity,
-        rollback_activity,
-    )
-
+async def run_worker():
     settings = get_settings()
-    logger.info(
-        "temporal_worker_connecting",
-        host=settings.temporal_host,
-        namespace=settings.temporal_namespace,
-    )
-
-    client = await Client.connect(
-        settings.temporal_host,
-        namespace=settings.temporal_namespace,
-    )
-
+    
+    # Connect to Temporal
+    client = await Client.connect(settings.temporal_url, namespace=settings.temporal_namespace)
+    
+    # Initialize activities
+    activities = DeploymentActivities()
+    
+    # Run the worker
     worker = Worker(
         client,
-        task_queue=TASK_QUEUE,
-        workflows=[StagedDeploymentTemporalWorkflow],
+        task_queue="deploy-queue",
+        workflows=[StagedDeploymentWorkflow],
         activities=[
-            check_readiness_gate_activity,
-            execute_stage_activity,
-            rollback_activity,
+            activities.check_readiness_gate,
+            activities.collect_real_metrics,
+            activities.update_traffic_pct
         ],
     )
-
-    logger.info("temporal_worker_running", task_queue=TASK_QUEUE)
+    
+    print(f"Temporal worker starting on queue 'deploy-queue'...")
     await worker.run()
-
 
 if __name__ == "__main__":
     asyncio.run(run_worker())
