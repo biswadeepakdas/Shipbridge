@@ -77,33 +77,33 @@ class HubSpotAdapter(ConnectorAdapter):
         for record in results:
             props = record.get("properties", {})
             if obj_type == "contacts":
-                name = f"{props.get("firstname", "")} {props.get("lastname", "")}".strip()
+                name = (props.get('firstname', '') + ' ' + props.get('lastname', '')).strip()
                 lines.append(f"## {name}")
-                lines.append(f"- **Email**: {props.get("email", "N/A")}")
-                lines.append(f"- **Company**: {props.get("company", "N/A")}")
-                lines.append(f"- **Stage**: {props.get("lifecyclestage", "N/A")}")
+                lines.append(f"- **Email**: {props.get('email', 'N/A')}")
+                lines.append(f"- **Company**: {props.get('company', 'N/A')}")
+                lines.append(f"- **Stage**: {props.get('lifecyclestage', 'N/A')}")
                 lines.append("")
             elif obj_type == "companies":
-                lines.append(f"## {props.get("name", "Unnamed")}")
-                lines.append(f"- **Industry**: {props.get("industry", "N/A")}")
-                revenue = props.get("annualrevenue", "0")
+                lines.append(f"## {props.get('name', 'Unnamed')}")
+                lines.append(f"- **Industry**: {props.get('industry', 'N/A')}")
+                revenue = props.get('annualrevenue', '0')
                 lines.append(f"- **Revenue**: ${int(float(revenue)):,}")
-                lines.append(f"- **Employees**: {props.get("numberofemployees", "N/A")}")
-                lines.append(f"- **City**: {props.get("city", "N/A")}")
+                lines.append(f"- **Employees**: {props.get('numberofemployees', 'N/A')}")
+                lines.append(f"- **City**: {props.get('city', 'N/A')}")
                 lines.append("")
             elif obj_type == "deals":
-                lines.append(f"## {props.get("dealname", "Unnamed")}")
-                amount = props.get("amount", "0")
+                lines.append(f"## {props.get('dealname', 'Unnamed')}")
+                amount = props.get('amount', '0')
                 lines.append(f"- **Amount**: ${int(float(amount)):,}")
-                lines.append(f"- **Stage**: {props.get("dealstage", "N/A")}")
-                lines.append(f"- **Close Date**: {props.get("closedate", "N/A")}")
+                lines.append(f"- **Stage**: {props.get('dealstage', 'N/A')}")
+                lines.append(f"- **Close Date**: {props.get('closedate', 'N/A')}")
                 lines.append("")
             elif obj_type == "activities":
                 # Simplified normalization for activities
                 activity_type = props.get("hs_activity_type", "Unknown")
                 lines.append(f"## {activity_type} Activity")
-                lines.append(f"- **Subject**: {props.get("hs_email_subject", props.get("hs_call_title", "N/A"))}")
-                lines.append(f"- **Time**: {props.get("hs_timestamp", "N/A")}")
+                lines.append(f"- **Subject**: {props.get('hs_email_subject', props.get('hs_call_title', 'N/A'))}")
+                lines.append(f"- **Time**: {props.get('hs_timestamp', 'N/A')}")
                 lines.append("")
 
         return NormalizedData(

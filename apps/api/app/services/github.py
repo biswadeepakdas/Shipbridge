@@ -220,7 +220,7 @@ def format_pr_comment(total_score: int, pillars: Dict[str, Any], gap_report: Dic
     if blockers:
         comment += "### Identified Gaps / Blockers\n"
         for b in blockers[:5]: # Limit to top 5 blockers for brevity in PR comment
-            comment += f"- **[{b.get("severity", "").upper()}]** {b.get("title", "")} — {b.get("fix_hint", "")}\n"
+            comment += f"- **[{b.get('severity', '').upper()}]** {b.get('title', '')} — {b.get('fix_hint', '')}\n"
         comment += "\n"
 
     comment += f"_For a full report, see the [ShipBridge dashboard]({get_settings().web_base_url})._\n"
