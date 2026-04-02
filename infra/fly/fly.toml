@@ -1,0 +1,47 @@
+# ShipBridge API — Fly.io Configuration
+# https://fly.io/docs/reference/configuration/
+#
+# Deploy with:
+#   fly launch --config infra/fly/fly.toml
+#   fly deploy --config infra/fly/fly.toml
+
+app = "shipbridge-api"
+primary_region = "sjc"          # San Jose, CA — change to your preferred region
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[env]
+  USE_TEMPORAL = "false"
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "INFO"
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+[checks]
+  [checks.health]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    port = 8000
+    timeout = "5s"
+    type = "http"

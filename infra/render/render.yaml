@@ -1,0 +1,83 @@
+# ShipBridge — Render Blueprint
+# Deploy all three services + Postgres in one click.
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this file to your repo root (or keep in infra/render/)
+#   2. In Render dashboard: New → Blueprint Instance → select repo
+#   3. Render will provision all services and the database automatically
+#   4. After first deploy, set API_BASE_URL and WEB_BASE_URL in the dashboard
+#   5. Run migrations: open a shell on shipbridge-api → alembic upgrade head
+
+services:
+  # ── FastAPI Web Server ────────────────────────────────────────
+  - type: web
+    name: shipbridge-api
+    env: python
+    region: oregon
+    plan: starter
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shipbridge-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false          # Set manually: paste your Upstash Redis URL
+      - key: OPENAI_API_KEY
+        sync: false          # Required: platform.openai.com/api-keys
+      - key: ANTHROPIC_API_KEY
+        sync: false          # Required: console.anthropic.com
+      - key: JWT_SECRET
+        generateValue: true  # Render auto-generates a secure random value
+      - key: USE_TEMPORAL
+        value: "false"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: API_BASE_URL
+        sync: false          # Set after first deploy: https://shipbridge-api.onrender.com
+      - key: WEB_BASE_URL
+        sync: false          # Set to your Vercel frontend URL
+
+  # ── Celery Background Worker ──────────────────────────────────
+  - type: worker
+    name: shipbridge-celery
+    env: python
+    region: oregon
+    plan: starter
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers worker --loglevel=info --concurrency=2
+    envVars:
+      - fromGroup: shipbridge-env
+
+  # ── Temporal Workflow Worker ──────────────────────────────────
+  - type: worker
+    name: shipbridge-temporal-worker
+    env: python
+    region: oregon
+    plan: starter
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.workers
+    envVars:
+      - fromGroup: shipbridge-env
+
+# ── Managed PostgreSQL ────────────────────────────────────────
+databases:
+  - name: shipbridge-db
+    plan: starter
+    databaseName: shipbridge
+    user: shipbridge
+    region: oregon
+
+# ── Shared Environment Variable Group ────────────────────────
+# Create this group in Render dashboard → Environment Groups
+# Add: REDIS_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY, DATABASE_URL
+envVarGroups:
+  - name: shipbridge-env
