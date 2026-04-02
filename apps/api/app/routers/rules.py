@@ -5,7 +5,7 @@ from redis.asyncio import Redis, from_url
 
 from app.middleware.auth import AuthContext, get_auth_context
 from app.os_layer.rule_registry import NormalizationRuleEntry, RuleRegistry
-from app.os_layer.unknown_event_queue import unknown_event_queue
+from app.os_layer.unknown_event_queue import UnknownEventQueue
 from app.schemas.response import APIResponse
 from app.workers.rule_gen import (
     RuleGenerationResult,
@@ -43,22 +43,24 @@ async def list_rules(
 ) -> APIResponse[RuleListResponse]:
     rule_registry = RuleRegistry(redis)
     rules = await rule_registry.list_rules(app)
+    unknown_queue = UnknownEventQueue(redis)
+    queue_size = await unknown_queue.size()
     return APIResponse(
         data=RuleListResponse(
             rules=rules,
-            unknown_queue_size=unknown_event_queue.size,
+            unknown_queue_size=queue_size,
         )
     )
 
 @router.post("/generate", response_model=APIResponse[RuleGenerationResult])
 async def trigger_rule_generation(
     auth: AuthContext = Depends(get_auth_context),
+    redis: Redis = Depends(get_redis),
 ) -> APIResponse[RuleGenerationResult]:
     if auth.role not in ("admin", "owner"):
         from app.exceptions import AppError, ErrorCode
         raise AppError(ErrorCode.FORBIDDEN, "Only admins can trigger rule generation")
-
-    result = await run_rule_generator() # Await the async function
+    result = await run_rule_generator(redis)
     return APIResponse(data=result)
 
 @router.post("/promote", response_model=APIResponse[dict])

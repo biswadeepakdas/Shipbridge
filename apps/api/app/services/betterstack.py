@@ -1,12 +1,12 @@
 import httpx
-from app.config import settings
+from app.config import get_settings
 import logging
 
 logger = logging.getLogger(__name__)
 
 class BetterstackService:
     def __init__(self):
-        self.heartbeat_url = settings.betterstack_heartbeat_url
+        self.heartbeat_url = get_settings().betterstack_heartbeat_url
 
     async def send_heartbeat(self):
         if not self.heartbeat_url:

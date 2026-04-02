@@ -8,10 +8,11 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
+from redis.asyncio import Redis
 
 from app.os_layer.jmespath_executor import NormalizedEvent, execute_rule
-from app.os_layer.rule_registry import rule_registry
-from app.os_layer.unknown_event_queue import UnknownEvent, unknown_event_queue
+from app.os_layer.rule_registry import RuleRegistry
+from app.os_layer.unknown_event_queue import UnknownEvent, UnknownEventQueue
 
 logger = structlog.get_logger()
 
@@ -34,10 +35,11 @@ class NormalizationResult:
         return self.normalized is not None
 
 
-def normalize_event(
+async def normalize_event(
     app: str,
     trigger: str,
     raw_payload: dict,
+    redis: Redis,
     tenant_id: str | None = None,
 ) -> NormalizationResult:
     """Process a raw event payload through the normalization pipeline.
@@ -46,8 +48,11 @@ def normalize_event(
     2. If found → execute JMESPath payload_map → return NormalizedEvent
     3. If not found → queue to UnknownEventQueue for offline rule generation
     """
+    rule_registry = RuleRegistry(redis)
+    unknown_event_queue = UnknownEventQueue(redis)
+
     # Step 1: Rule lookup
-    rule = rule_registry.lookup(app, trigger)
+    rule = await rule_registry.lookup(app, trigger)
 
     if rule:
         # Step 2: Execute rule
@@ -73,7 +78,8 @@ def normalize_event(
         received_at=datetime.now(timezone.utc).isoformat(),
         tenant_id=tenant_id,
     )
-    unknown_event_queue.enqueue(unknown)
-    logger.info("unknown_event_queued", app=app, trigger=trigger, queue_size=unknown_event_queue.size)
+    await unknown_event_queue.enqueue(unknown)
+    queue_size = await unknown_event_queue.size()
+    logger.info("unknown_event_queued", app=app, trigger=trigger, queue_size=queue_size)
 
     return NormalizationResult(queued_as_unknown=True)

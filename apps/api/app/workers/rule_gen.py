@@ -9,8 +9,7 @@ from pydantic import BaseModel
 from anthropic import Anthropic
 from redis.asyncio import Redis
 
-from app.os_layer.rule_registry import NormalizationRule
-from app.services.cost_modeler import CostModelerEntry, RuleRegistry
+from app.os_layer.rule_registry import NormalizationRuleEntry, RuleRegistry
 from app.os_layer.unknown_event_queue import UnknownEvent, UnknownEventQueue
 from app.config import get_settings
 
@@ -78,7 +77,7 @@ Generate the JSON for the NormalizationRuleEntry:
 """
 
     try:
-        response = await client.messages.create(
+        response = client.messages.create(
             model="claude-3-haiku-20240307", # Using Haiku as per docstring
             max_tokens=1000,
             temperature=0.7,
@@ -123,7 +122,7 @@ async def run_rule_generator(redis: Redis, batch_size: int = 50) -> RuleGenerati
     This is the main entry point called by Celery beat every 5 minutes.
     """
     unknown_event_queue = UnknownEventQueue(redis)
-    rule_registry = RuleRegistry(redis)
+    rule_registry_inst = RuleRegistry(redis)
 
     events = await unknown_event_queue.drain(limit=batch_size)
 
@@ -143,14 +142,14 @@ async def run_rule_generator(redis: Redis, batch_size: int = 50) -> RuleGenerati
         seen_triggers.add(trigger_key)
 
         # Skip if a rule already exists (active or draft)
-        existing = await rule_registry.lookup(event.app, event.trigger)
+        existing = await rule_registry_inst.lookup(event.app, event.trigger)
         if existing:
             continue
 
         result = await _generate_rule_for_event_llm(event) # Use async LLM call
         if result:
             # Register as draft in the registry
-            await rule_registry.register(result.rule)
+            await rule_registry_inst.register(result.rule)
             generated_rules.append(result)
             logger.info("draft_rule_generated", app=event.app, trigger=event.trigger,
                        rule_id=result.rule.rule_id, confidence=result.confidence)

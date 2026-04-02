@@ -1,15 +1,15 @@
 import stripe
-from app.config import settings
+from app.config import get_settings
 import logging
 
 logger = logging.getLogger(__name__)
 
 class StripeMeteringService:
     def __init__(self):
-        stripe.api_key = settings.stripe_api_key
+        stripe.api_key = get_settings().stripe_api_key
 
     async def report_usage(self, customer_id: str, subscription_item_id: str, quantity: int, action: str = "increment"):
-        if not settings.stripe_api_key:
+        if not get_settings().stripe_api_key:
             logger.warning("Stripe API key not configured. Skipping usage report.")
             return
 
