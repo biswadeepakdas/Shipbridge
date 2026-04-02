@@ -1,24 +1,18 @@
 # ShipBridge API — Production Dockerfile
 # Used by Railway, Fly.io, Render (Docker mode), and any container-based platform.
 
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Install system dependencies:
-#   - gcc / libpq-dev: required by asyncpg and psycopg2
-#   - libpango / libcairo / libgdk-pixbuf: required by weasyprint (PDF generation)
-#   - libffi-dev / shared-mime-info / fonts-liberation: required by weasyprint
+#   - gcc / libpq-dev: required by asyncpg
+#   - libpango-1.0-0 / libpangoft2-1.0-0 / libharfbuzz-subset0: required by weasyprint
+#     (per https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#debian-11)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgdk-pixbuf2.0-0 \
-    libffi-dev \
-    shared-mime-info \
-    libcairo2 \
-    libcairo-gobject2 \
-    fonts-liberation \
+    libharfbuzz0b \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
