@@ -49,9 +49,9 @@ export default function DeploymentsPage() {
         setStages((prev) =>
           prev.map((s) =>
             s.name === event.stage
-              ? { ...s, status: event.status as "complete" | "active" | "pending" | "failed" }
+              ? { ...s, status: event.status as typeof MOCK_STAGES[number]["status"] }
               : s
-          )
+          ) as typeof MOCK_STAGES
         );
         if (event.status === "complete" && event.stage === "production") {
           setLiveStatus("complete");
