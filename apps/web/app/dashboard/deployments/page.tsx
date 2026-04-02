@@ -44,7 +44,7 @@ export default function DeploymentsPage() {
 
   const { connected } = useShipBridgeSocket({
     tenantId: "demo-tenant",
-    onEvent: useCallback((event: SocketEvent) => {
+    onEvent: useCallback((event: Parameters<NonNullable<Parameters<typeof useShipBridgeSocket>[0]['onEvent']>>[0]) => {
       if (event.type === "deployment_stage_update") {
         setStages((prev) =>
           prev.map((s) =>
