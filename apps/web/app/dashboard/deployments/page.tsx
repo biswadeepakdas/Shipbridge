@@ -9,7 +9,7 @@ import StageTrack from "@/components/deploy/stage-track";
 import CanaryMetrics from "@/components/deploy/canary-metrics";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
-import { useShipBridgeSocket } from "@/hooks/useShipBridgeSocket";
+import { useShipBridgeSocket, type SocketEvent } from "@/hooks/useShipBridgeSocket";
 
 const MOCK_STAGES = [
   { name: "sandbox", label: "Sandbox", trafficPct: 0, status: "complete" as const },
@@ -44,7 +44,7 @@ export default function DeploymentsPage() {
 
   const { connected } = useShipBridgeSocket({
     tenantId: "demo-tenant",
-    onEvent: useCallback((event) => {
+    onEvent: useCallback((event: SocketEvent) => {
       if (event.type === "deployment_stage_update") {
         setStages((prev) =>
           prev.map((s) =>
