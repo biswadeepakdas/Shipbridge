@@ -1,0 +1,64 @@
+{
+  "description": "ShipBridge WAF Rules",
+  "rules": [
+    {
+      "action": "block",
+      "expression": "cf.threat_score > 50",
+      "description": "Block high threat-score requests"
+    },
+    {
+      "action": "challenge",
+      "expression": "(cf.threat_score > 10) and (http.request.uri.path contains \"/api/\")",
+      "description": "Challenge medium-threat API requests"
+    },
+    {
+      "action": "block",
+      "expression": "http.request.uri.path contains \"/.env\" or http.request.uri.path contains \"/wp-admin\" or http.request.uri.path contains \"/.git\"",
+      "description": "Block common exploit paths"
+    },
+    {
+      "action": "block",
+      "expression": "http.request.body.size > 1048576",
+      "description": "Block request bodies over 1MB"
+    }
+  ],
+  "rate_limiting": [
+    {
+      "expression": "http.request.uri.path matches \"^/api/v1/auth/.*\"",
+      "characteristics": ["ip.src"],
+      "period": 60,
+      "requests_per_period": 20,
+      "action": "block",
+      "mitigation_timeout": 300,
+      "description": "Rate limit auth endpoints: 20 req/min per IP"
+    },
+    {
+      "expression": "http.request.uri.path matches \"^/webhooks/.*\"",
+      "characteristics": ["ip.src"],
+      "period": 60,
+      "requests_per_period": 60,
+      "action": "block",
+      "mitigation_timeout": 60,
+      "description": "Rate limit webhook endpoints: 60 req/min per IP"
+    },
+    {
+      "expression": "http.request.uri.path matches \"^/api/v1/.*\"",
+      "characteristics": ["ip.src"],
+      "period": 60,
+      "requests_per_period": 120,
+      "action": "block",
+      "mitigation_timeout": 60,
+      "description": "Rate limit all API endpoints: 120 req/min per IP"
+    }
+  ],
+  "managed_rulesets": [
+    {
+      "id": "efb7b8c949ac4650a09736fc376e9aee",
+      "name": "Cloudflare Managed Ruleset"
+    },
+    {
+      "id": "4814384a9e5d4991b9815dcfc25d2f1f",
+      "name": "Cloudflare OWASP Core Ruleset"
+    }
+  ]
+}
