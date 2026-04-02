@@ -1,5 +1,5 @@
 # ShipBridge API — Production Dockerfile
-# Used by Fly.io, Render (Docker mode), and any container-based platform.
+# Used by Railway, Fly.io, Render (Docker mode), and any container-based platform.
 
 FROM python:3.11-slim
 
@@ -18,12 +18,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose the port Uvicorn will listen on
+# Expose the default port (Railway overrides this via PORT env var)
 EXPOSE 8000
 
 # Health check — used by Railway, Render, and Fly.io
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:' + __import__('os').environ.get('PORT','8000') + '/health')"
 
-# Default command — override in docker-compose or platform config for workers
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Use Python entrypoint so PORT env var is read via os.environ (not shell expansion)
+# Railway injects PORT automatically; entrypoint.py reads it with os.environ.get("PORT", 8000)
+CMD ["python", "entrypoint.py"]
