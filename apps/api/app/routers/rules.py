@@ -108,5 +108,5 @@ async def check_schema(
 @router.get("/schema-drift", response_model=APIResponse[list[SchemaHash]])
 async def get_drifted_schemas(
     auth: AuthContext = Depends(get_auth_context),
-) -> APIResponse[list[SchemaHash]:
+) -> APIResponse[list[SchemaHash]]:
     return APIResponse(data=list_drifted_schemas())

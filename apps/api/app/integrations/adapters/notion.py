@@ -113,8 +113,8 @@ class NotionAdapter(ConnectorAdapter):
         title = self._extract_title(props.get("title", {}))
 
         lines = [f"# {title}\n"]
-        lines.append(f"- **Created**: {data.get("created_time", "N/A")}")
-        lines.append(f"- **Last edited**: {data.get("last_edited_time", "N/A")}")
+        lines.append(f"- **Created**: {data.get('created_time', 'N/A')}")
+        lines.append(f"- **Last edited**: {data.get('last_edited_time', 'N/A')}")
 
         for key, value in props.items():
             if key == "title":
@@ -175,12 +175,12 @@ class NotionAdapter(ConnectorAdapter):
             obj = item.get("object", "unknown")
             if obj == "page":
                 title = self._extract_title(item.get("properties", {}).get("title", {}))
-                lines.append(f"- **Page**: {title} (id: {item.get("id", "")})")
+                lines.append(f"- **Page**: {title} (id: {item.get('id', '')})")
             elif obj == "database":
                 # Database title is not directly in search results, need to retrieve separately
-                lines.append(f"- **Database**: ID: {item.get("id", "")} (title not available)")
+                lines.append(f"- **Database**: ID: {item.get('id', '')} (title not available)")
             elif obj == "block":
-                lines.append(f"- **Block**: ID: {item.get("id", "")} (content not directly available)")
+                lines.append(f"- **Block**: ID: {item.get('id', '')} (content not directly available)")
 
         return NormalizedData(
             source="notion",
@@ -227,7 +227,7 @@ class NotionAdapter(ConnectorAdapter):
         if "formula" in prop and prop["formula"] and "string" in prop["formula"]:
             return prop["formula"]["string"]
         if "relation" in prop and prop["relation"]:
-            return f"{len(prop["relation"])} related items"
+            return f"{len(prop['relation'])} related items"
         if "rollup" in prop and prop["rollup"] and "number" in prop["rollup"]:
             return str(prop["rollup"]["number"])
         if "created_time" in prop and prop["created_time"]:

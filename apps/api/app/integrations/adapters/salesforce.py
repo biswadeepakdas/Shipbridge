@@ -92,7 +92,8 @@ class SalesforceAdapter(ConnectorAdapter):
             # Remove attributes key which is Salesforce metadata
             record.pop("attributes", None)
 
-            lines.append(f"## {record.get("Name", record.get("Subject", f"{obj_type} ID: {record.get("Id", "unknown")}"))}")
+            record_name = record.get('Name') or record.get('Subject') or f"{obj_type} ID: {record.get('Id', 'unknown')}"
+            lines.append(f"## {record_name}")
             for k, v in record.items():
                 if k != "Id" and k != "Name" and k != "Subject": # Avoid duplicating Name/Subject
                     lines.append(f"- **{k}**: {v}")
