@@ -10,7 +10,7 @@ import CanaryMetrics from "@/components/deploy/canary-metrics";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
 import { useShipBridgeSocket, type SocketEvent } from "@/hooks/useShipBridgeSocket";
-import { useApiGet } from "@/hooks/use-api";
+import { useApiGet, useApiPost } from "@/hooks/use-api";
 import { apiUrl } from "@/lib/api";
 import type { ProjectOut, AssessmentRunOut } from "@/types/api";
 
@@ -28,7 +28,6 @@ const FALLBACK_METRICS = [
   { label: "Escalation", value: "5.1", delta: 1.1, unit: "%", invertDelta: true },
 ];
 
-// TODO: Replace FALLBACK_HISTORY with real data once GET /api/v1/deployments is built
 const FALLBACK_HISTORY = [
   { id: "d1", project: "Support Agent", status: "complete", score: 82, stages: 4, duration: "18h 32m", date: "2026-03-28" },
   { id: "d2", project: "Review Bot", status: "rolled_back", score: 78, stages: 2, duration: "6h 15m", date: "2026-03-25" },
@@ -49,6 +48,21 @@ export default function DeploymentsPage() {
   // Fetch projects for context (used for display names in history, etc.)
   const { data: projects } = useApiGet<ProjectOut[]>(apiUrl("/api/v1/projects"));
   const projectName = projects?.[0]?.name ?? "Support Agent";
+
+  const { execute: advanceStage, isLoading: isAdvancing } = useApiPost<Record<string, unknown>, { action: string }>(
+    apiUrl("/api/v1/deployments/current/advance")
+  );
+  const { execute: rollbackDeploy, isLoading: isRollingBack } = useApiPost<Record<string, unknown>, { action: string }>(
+    apiUrl("/api/v1/deployments/current/rollback")
+  );
+
+  const handleAdvance = useCallback(async () => {
+    await advanceStage({ action: "advance" });
+  }, [advanceStage]);
+
+  const handleRollback = useCallback(async () => {
+    await rollbackDeploy({ action: "rollback" });
+  }, [rollbackDeploy]);
 
   const { connected } = useShipBridgeSocket({
     tenantId: "demo-tenant",
@@ -104,19 +118,22 @@ export default function DeploymentsPage() {
 
         {/* Manual controls */}
         <div style={{ display: "flex", gap: "8px", marginBottom: "24px" }}>
-          <button type="button" style={{
+          <button type="button" onClick={handleAdvance} disabled={isAdvancing} style={{
             padding: "8px 16px", borderRadius: "6px", border: "none",
             backgroundColor: T.sig, color: T.s0, fontFamily: FONT.ui,
-            fontSize: 13, fontWeight: 500, cursor: "pointer",
+            fontSize: 13, fontWeight: 500, cursor: isAdvancing ? "default" : "pointer",
+            opacity: isAdvancing ? 0.6 : 1,
           }}>
-            Advance to next stage
+            {isAdvancing ? "Advancing..." : "Advance to next stage"}
           </button>
-          <button type="button" style={{
+          <button type="button" onClick={handleRollback} disabled={isRollingBack} style={{
             padding: "8px 16px", borderRadius: "6px",
             border: `1px solid ${T.b2}`, backgroundColor: "transparent",
-            color: T.danger, fontFamily: FONT.ui, fontSize: 13, cursor: "pointer",
+            color: T.danger, fontFamily: FONT.ui, fontSize: 13,
+            cursor: isRollingBack ? "default" : "pointer",
+            opacity: isRollingBack ? 0.6 : 1,
           }}>
-            Rollback
+            {isRollingBack ? "Rolling back..." : "Rollback"}
           </button>
         </div>
 
@@ -133,7 +150,6 @@ export default function DeploymentsPage() {
               <span key={h} style={{ fontFamily: FONT.label, fontSize: 10, color: T.t3, textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</span>
             ))}
           </div>
-          {/* TODO: Use projectName from API for first entry once deployments API is wired */}
           {FALLBACK_HISTORY.map((dep) => {
             const statusInfo = STATUS_MAP[dep.status] ?? { status: "neutral" as const, label: dep.status };
             return (
