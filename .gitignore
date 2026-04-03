@@ -47,3 +47,4 @@ htmlcov/
 # Misc
 *.log
 *.tmp
+autogpt_compliance_report.pdf
