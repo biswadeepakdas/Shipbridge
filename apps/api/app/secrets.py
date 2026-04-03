@@ -22,5 +22,5 @@ def get_secret(key: str, default: Optional[str] = None, required: bool = False) 
 
 def get_github_private_key() -> str:
     """Retrieves the GitHub App private key, handling multiline format."""
-    key = get_secret("GITHUB_PRIVATE_KEY", required=True)
-    return key.replace("\\n", "\n")
+    key = get_secret("GITHUB_PRIVATE_KEY", default="")
+    return key.replace("\\n", "\n") if key else ""

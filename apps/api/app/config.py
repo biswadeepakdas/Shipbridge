@@ -40,10 +40,10 @@ class Settings(BaseSettings):
     web_base_url: str = get_secret("WEB_BASE_URL", default="http://localhost:3000")
 
     # Temporal deployment mode
-    use_temporal: bool = True  # Default to true for production-ready fix
-    enable_chaos_testing: bool = False
+    use_temporal: bool = False  # Explicitly set USE_TEMPORAL=true in production deployments
+    enable_chaos_testing: bool = False  # Set to True in staging to inject controlled faults
     stripe_api_key: str | None = None
-    betterstack_heartbeat_url: str | None = None  # Set to True in staging to inject controlled faults
+    betterstack_heartbeat_url: str | None = None
 
     # GitHub App
     github_app_id: str = get_secret("GITHUB_APP_ID", default="")

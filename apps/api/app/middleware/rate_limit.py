@@ -3,6 +3,7 @@
 100 req/min per tenant. Production uses Redis sliding window.
 """
 
+import hashlib
 import time
 from collections import defaultdict
 
@@ -103,9 +104,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization", "")
         api_key = request.headers.get("x-api-key", "")
         if auth:
-            return f"auth:{auth[:20]}"
+            return f"auth:{hashlib.sha256(auth.encode()).hexdigest()[:16]}"
         if api_key:
-            return f"key:{api_key[:12]}"
+            return f"key:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
         # Fallback to IP
         client = request.client
         ip = client.host if client else "unknown"

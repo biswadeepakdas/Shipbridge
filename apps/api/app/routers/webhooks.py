@@ -18,8 +18,10 @@ logger = structlog.get_logger()
 
 router = APIRouter(tags=["webhooks"])
 
-async def get_redis() -> Redis:
-    """FastAPI dependency for Redis."""
+async def get_redis(request: Request) -> Redis:
+    """FastAPI dependency for Redis — uses pooled connection from app state."""
+    if hasattr(request.app.state, "redis") and request.app.state.redis:
+        return request.app.state.redis
     settings = get_settings()
     return from_url(settings.redis_url, decode_responses=True)
 
@@ -50,9 +52,14 @@ async def receive_webhook(
     signature = x_hub_signature_256 or x_webhook_signature
     if signature:
         settings = get_settings()
-        secret = settings.github_webhook_secret
+        provider_secrets = {
+            "github": settings.github_webhook_secret,
+        }
+        secret = provider_secrets.get(provider, "")
         if secret and not _verify_hmac(raw_body, signature, secret):
             raise AppError(ErrorCode.FORBIDDEN, "Invalid webhook signature")
+        elif not secret:
+            logger.warning("webhook_secret_missing", provider=provider, message="No webhook secret configured for provider")
 
     # Extract tenant_id from payload if present
     tenant_id = body.get("tenant_id")

@@ -53,6 +53,19 @@ class ConnectorTestResult(BaseModel):
     message: str
 
 
+_SENSITIVE_PATTERNS = {"key", "secret", "token", "password", "credential"}
+
+def _sanitize_config(config: dict) -> dict:
+    """Mask sensitive values in config_json before returning to clients."""
+    sanitized = {}
+    for k, v in config.items():
+        if any(p in k.lower() for p in _SENSITIVE_PATTERNS):
+            sanitized[k] = "***REDACTED***"
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 # --- Routes ---
 
 @router.post("", response_model=APIResponse[ConnectorOut])
@@ -82,7 +95,7 @@ async def create_connector(
             adapter_type=connector.adapter_type,
             auth_type=connector.auth_type,
             is_active=connector.is_active,
-            config_json=connector.config_json,
+            config_json=_sanitize_config(connector.config_json),
             created_at=connector.created_at.isoformat(),
         )
     )
@@ -127,7 +140,7 @@ async def list_connectors(
             adapter_type=c.adapter_type,
             auth_type=c.auth_type,
             is_active=c.is_active,
-            config_json=c.config_json,
+            config_json=_sanitize_config(c.config_json),
             circuit_breaker=cb_status,
             latest_health=latest_health,
             created_at=c.created_at.isoformat(),
@@ -243,7 +256,7 @@ async def list_marketplace_connectors(request: Request):
 
 
 @router.post("/marketplace/publish")
-async def publish_marketplace_connector(payload: MarketplaceConnectorPublish, request: Request):
+async def publish_marketplace_connector(payload: MarketplaceConnectorPublish, request: Request, auth: AuthContext = Depends(get_auth_context)):
     """Publishes a new connector to the community marketplace."""
     import uuid as _uuid
     redis = request.app.state.redis
@@ -253,7 +266,7 @@ async def publish_marketplace_connector(payload: MarketplaceConnectorPublish, re
         "name": payload.name,
         "description": payload.description,
         "category": payload.category,
-        "author_tenant_id": payload.author_tenant_id,
+        "author_tenant_id": auth.tenant_id,
         "connector_code_url": payload.connector_code_url,
         "install_count": "0",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -264,7 +277,7 @@ async def publish_marketplace_connector(payload: MarketplaceConnectorPublish, re
 
 
 @router.post("/marketplace/{connector_id}/install")
-async def install_marketplace_connector(connector_id: str, request: Request):
+async def install_marketplace_connector(connector_id: str, request: Request, auth: AuthContext = Depends(get_auth_context)):
     """Increments the install count for a marketplace connector."""
     redis = request.app.state.redis
     key = f"connector:{connector_id}"
