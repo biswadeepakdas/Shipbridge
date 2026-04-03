@@ -163,7 +163,7 @@ class RedisCircuitBreaker:
         current = CircuitState(data.get("state", "closed"))
         if current == CircuitState.OPEN:
             last_fail = float(data.get("last_failure_time", "0"))
-            if last_fail > 0 and (time.monotonic() - last_fail) >= self.recovery_timeout:
+            if last_fail > 0 and (time.time() - last_fail) >= self.recovery_timeout:
                 await self._set_fields(state="half_open")
                 return CircuitState.HALF_OPEN
         return current
@@ -181,7 +181,7 @@ class RedisCircuitBreaker:
         new_state = "closed" if current == CircuitState.HALF_OPEN else data.get("state", "closed")
         await self._set_fields(
             state=new_state, failure_count="0",
-            last_success_time=str(time.monotonic()),
+            last_success_time=str(time.time()),
             total_requests=str(total),
         )
 
@@ -202,7 +202,7 @@ class RedisCircuitBreaker:
 
         await self._set_fields(
             state=new_state, failure_count=str(failures),
-            last_failure_time=str(time.monotonic()),
+            last_failure_time=str(time.time()),
             total_requests=str(total_req), total_failures=str(total_fail),
         )
 

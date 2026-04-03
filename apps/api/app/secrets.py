@@ -5,18 +5,18 @@ import structlog
 
 logger = structlog.get_logger()
 
-def get_secret(key: str, default: Optional[str] = None, required: bool = False) -> str:
+def get_secret(key: str, default: Optional[str] = None, required: bool = False) -> Optional[str]:
     """Retrieves a secret from environment variables.
 
     In a production environment, this function would be extended to fetch secrets
     from a secure secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault).
+
+    Returns None when the variable is unset and no default is provided.
     """
     value = os.getenv(key, default)
     if required and value is None:
         logger.error("secret_missing", key=key, message="Required secret is not set in environment variables.")
         raise ValueError(f"Required secret '{key}' is not set.")
-    elif value is None:
-        logger.warning("secret_not_set", key=key, message="Optional secret is not set in environment variables.")
     return value
 
 

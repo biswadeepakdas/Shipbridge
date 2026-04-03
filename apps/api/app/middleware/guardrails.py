@@ -41,33 +41,51 @@ class GuardrailsMiddleware(BaseHTTPMiddleware):
         if "application/json" not in content_type:
             return response
 
+        # Only process responses that have a body attribute (non-streaming)
+        if not hasattr(response, "body_iterator"):
+            return response
+
+        # Read the body, keeping a hard cap to avoid memory spikes
         body_bytes = b""
         async for chunk in response.body_iterator:
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8")
             body_bytes += chunk
-
-        # Skip PII scan for large responses to prevent memory spikes
-        if len(body_bytes) > 1_048_576:  # 1 MB
-            logger.warning("guardrails_skip_large_response", size=len(body_bytes))
-            return Response(content=body_bytes, status_code=response.status_code, headers=dict(response.headers), media_type=response.media_type)
+            if len(body_bytes) > 1_048_576:  # 1 MB — stop scanning
+                # Drain remaining chunks and return as-is
+                remaining = [chunk async for chunk in response.body_iterator]
+                body_bytes += b"".join(
+                    c.encode("utf-8") if isinstance(c, str) else c for c in remaining
+                )
+                logger.warning("guardrails_skip_large_response", size=len(body_bytes))
+                return Response(
+                    content=body_bytes,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=response.media_type,
+                )
 
         try:
             body_text = body_bytes.decode("utf-8")
-            results = self.analyzer.analyze(text=body_text, language="en",
-                                            entities=["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"])
+            results = self.analyzer.analyze(
+                text=body_text, language="en",
+                entities=["PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"],
+            )
             if results:
                 logger.warning(
-                    "PII detected in response for path %s — redacting %d entities.",
-                    request.url.path, len(results)
+                    "guardrails_pii_detected",
+                    path=request.url.path,
+                    count=len(results),
                 )
                 from presidio_anonymizer.entities import OperatorConfig
                 anonymized = self.anonymizer.anonymize(
                     text=body_text,
                     analyzer_results=results,
-                    operators={"DEFAULT": OperatorConfig("replace", {"new_value": "<REDACTED>"})}
+                    operators={"DEFAULT": OperatorConfig("replace", {"new_value": "<REDACTED>"})},
                 )
                 body_bytes = anonymized.text.encode("utf-8")
         except Exception as exc:
-            logger.error("GuardrailsMiddleware error: %s", exc)
+            logger.error("guardrails_error", error=str(exc))
 
         return Response(
             content=body_bytes,

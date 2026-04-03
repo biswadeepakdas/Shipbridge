@@ -40,9 +40,11 @@ class OAuthVault:
     def _encrypt(self, data: str) -> str:
         """Basic obfuscation for dev. Production uses AES-256 via Supabase Vault."""
         settings = get_settings()
-        if settings.environment != "development":
-            import structlog
-            structlog.get_logger().critical("insecure_vault", message="OAuthVault using base64 obfuscation in non-development environment. Use SupabaseVault for production.")
+        if settings.environment not in ("development", "test"):
+            raise RuntimeError(
+                "OAuthVault (in-memory, base64) must not be used outside development/test. "
+                "Configure SupabaseVault for production by setting SUPABASE_SERVICE_KEY."
+            )
         key = settings.jwt_secret.encode()
         signature = hmac.new(key, data.encode(), hashlib.sha256).hexdigest()[:8]
         encoded = base64.b64encode(data.encode()).decode()

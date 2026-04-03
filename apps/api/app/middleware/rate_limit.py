@@ -19,6 +19,10 @@ DEFAULT_RATE = 100  # requests
 DEFAULT_WINDOW = 60  # seconds
 
 
+# Maximum distinct keys to track before evicting stale entries
+_MAX_KEYS = 50_000
+
+
 class RateLimiter:
     """In-memory sliding window rate limiter. Production uses Redis."""
 
@@ -26,13 +30,27 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._requests: dict[str, list[float]] = defaultdict(list)
+        self._eviction_counter = 0
+
+    def _evict_stale_keys(self, now: float) -> None:
+        """Remove keys whose requests have all expired."""
+        window_start = now - self.window_seconds
+        stale_keys = [k for k, ts_list in self._requests.items() if not ts_list or ts_list[-1] <= window_start]
+        for k in stale_keys:
+            del self._requests[k]
 
     def is_allowed(self, key: str) -> tuple[bool, int, int]:
         """Check if request is allowed. Returns (allowed, remaining, reset_seconds)."""
         now = time.monotonic()
         window_start = now - self.window_seconds
 
-        # Clean old requests
+        # Periodic eviction: every 1000 requests or if too many keys
+        self._eviction_counter += 1
+        if self._eviction_counter >= 1000 or len(self._requests) > _MAX_KEYS:
+            self._evict_stale_keys(now)
+            self._eviction_counter = 0
+
+        # Clean old requests for this key
         self._requests[key] = [t for t in self._requests[key] if t > window_start]
 
         count = len(self._requests[key])
@@ -51,6 +69,7 @@ class RateLimiter:
             self._requests.pop(key, None)
         else:
             self._requests.clear()
+            self._eviction_counter = 0
 
 
 # Singleton

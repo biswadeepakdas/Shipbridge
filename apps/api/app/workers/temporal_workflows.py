@@ -196,3 +196,154 @@ class StagedDeploymentWorkflow:
 
         await broadcast_status(DeployStage.PRODUCTION, StageStatus.COMPLETE, "Deployment completed successfully.")
         return "completed_successfully"
+
+
+# ---------------------------------------------------------------------------
+# In-process deployment engine (dev / test — no Temporal required)
+# ---------------------------------------------------------------------------
+
+def check_readiness_gate(score: int) -> tuple[bool, str]:
+    """Check if readiness score meets the deployment threshold."""
+    if score >= READINESS_THRESHOLD:
+        return True, f"Score {score} meets threshold {READINESS_THRESHOLD}"
+    return False, f"Score {score} is below threshold {READINESS_THRESHOLD}"
+
+
+def simulate_stage_metrics(
+    stage: DeployStage,
+    inject_regression: bool = False,
+) -> StageMetrics:
+    """Return simulated metrics for a deployment stage."""
+    configs = {
+        DeployStage.SANDBOX:    {"sr": 0.96, "lat": 250, "cost": 0.018, "err": 0.04},
+        DeployStage.CANARY_5:   {"sr": 0.94, "lat": 280, "cost": 0.021, "err": 0.06},
+        DeployStage.CANARY_25:  {"sr": 0.93, "lat": 300, "cost": 0.024, "err": 0.07},
+        DeployStage.PRODUCTION: {"sr": 0.92, "lat": 320, "cost": 0.027, "err": 0.08},
+    }
+    c = dict(configs.get(stage, configs[DeployStage.SANDBOX]))
+    if inject_regression:
+        c["sr"] = max(0, c["sr"] - 0.12)
+        c["err"] = min(1.0, c["err"] + 0.15)
+        c["lat"] = c["lat"] * 1.8
+    return StageMetrics(
+        task_success_rate=c["sr"],
+        latency_p95_ms=c["lat"],
+        token_cost_per_task=c["cost"],
+        error_rate=c["err"],
+    )
+
+
+def check_auto_rollback(
+    baseline: StageMetrics | None,
+    current: StageMetrics,
+) -> tuple[bool, str]:
+    """Determine if current metrics warrant an automatic rollback."""
+    if baseline is None:
+        return False, "No baseline — cannot compare"
+    delta = baseline.task_success_rate - current.task_success_rate
+    if delta > 0.05:
+        return True, f"Success rate dropped by {delta:.1%}"
+    return False, "Metrics within acceptable range"
+
+
+class WorkflowStage(BaseModel):
+    name: DeployStage
+    status: StageStatus = StageStatus.PENDING
+    metrics: StageMetrics | None = None
+
+
+class WorkflowState(BaseModel):
+    id: str
+    project_id: str
+    tenant_id: str
+    status: str  # running | complete | failed | rolled_back
+    current_stage: DeployStage | None = None
+    stages: list[WorkflowStage] = []
+    baseline_metrics: StageMetrics | None = None
+
+
+class DeploymentEngine:
+    """Synchronous in-process deployment engine for dev/test."""
+
+    def __init__(self) -> None:
+        self._workflows: dict[str, WorkflowState] = {}
+
+    def clear(self) -> None:
+        self._workflows.clear()
+
+    def create_workflow(
+        self, project_id: str, tenant_id: str, readiness_score: int,
+    ) -> WorkflowState:
+        passed, msg = check_readiness_gate(readiness_score)
+        wf_id = f"deploy-{project_id}-{uuid.uuid4().hex[:8]}"
+        stages = [
+            WorkflowStage(name=s)
+            for s in [DeployStage.SANDBOX, DeployStage.CANARY_5, DeployStage.CANARY_25, DeployStage.PRODUCTION]
+        ]
+        if not passed:
+            wf = WorkflowState(
+                id=wf_id, project_id=project_id, tenant_id=tenant_id,
+                status="failed", current_stage=None, stages=stages,
+            )
+        else:
+            stages[0].status = StageStatus.ACTIVE
+            wf = WorkflowState(
+                id=wf_id, project_id=project_id, tenant_id=tenant_id,
+                status="running", current_stage=DeployStage.SANDBOX, stages=stages,
+            )
+        self._workflows[wf_id] = wf
+        audit_logger.log(
+            tenant_id=tenant_id, action=AuditAction.DEPLOYMENT_EVENT,
+            resource_type="deployment", resource_id=wf_id,
+            details={"workflow_started": True, "readiness_score": readiness_score},
+        )
+        return wf
+
+    def get_workflow(self, wf_id: str) -> WorkflowState | None:
+        return self._workflows.get(wf_id)
+
+    def list_workflows(self, tenant_id: str) -> list[WorkflowState]:
+        return [w for w in self._workflows.values() if w.tenant_id == tenant_id]
+
+    def advance_stage(
+        self, wf_id: str, inject_regression: bool = False,
+    ) -> WorkflowState:
+        wf = self._workflows[wf_id]
+        if wf.status != "running" or wf.current_stage is None:
+            return wf
+
+        stage_order = [DeployStage.SANDBOX, DeployStage.CANARY_5, DeployStage.CANARY_25, DeployStage.PRODUCTION]
+        idx = stage_order.index(wf.current_stage)
+
+        # Collect metrics for current stage
+        metrics = simulate_stage_metrics(wf.current_stage, inject_regression)
+        wf.stages[idx].metrics = metrics
+
+        # Auto-rollback check
+        if wf.baseline_metrics is not None:
+            should_rollback, reason = check_auto_rollback(wf.baseline_metrics, metrics)
+            if should_rollback:
+                wf.stages[idx].status = StageStatus.ROLLED_BACK
+                wf.status = "rolled_back"
+                return wf
+
+        # Capture baseline from sandbox
+        if wf.current_stage == DeployStage.SANDBOX:
+            wf.baseline_metrics = metrics
+
+        # Mark complete and advance
+        wf.stages[idx].status = StageStatus.COMPLETE
+
+        if idx + 1 < len(stage_order):
+            next_stage = stage_order[idx + 1]
+            wf.current_stage = next_stage
+            wf.stages[idx + 1].status = StageStatus.ACTIVE
+        else:
+            wf.status = "complete"
+            wf.current_stage = None
+
+        return wf
+
+
+# Singleton for dev/test
+deployment_engine = DeploymentEngine()

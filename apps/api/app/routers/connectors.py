@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -237,11 +237,25 @@ class MarketplaceConnectorPublish(BaseModel):
     author_tenant_id: str
     connector_code_url: str
 
+    @field_validator("connector_code_url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if parsed.scheme not in ("https",) or not parsed.netloc:
+            raise ValueError("connector_code_url must be a valid HTTPS URL")
+        return v
+
 
 @router.get("/marketplace")
-async def list_marketplace_connectors(request: Request):
+async def list_marketplace_connectors(
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+):
     """Returns all published connectors from the community marketplace."""
-    redis = request.app.state.redis
+    redis = getattr(request.app.state, "redis", None)
+    if not redis:
+        return APIResponse(data={"connectors": [], "total": 0})
     connector_ids = await redis.smembers("connector:all")
     connectors = []
     for cid in connector_ids:
@@ -252,7 +266,7 @@ async def list_marketplace_connectors(request: Request):
                 k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
                 for k, v in data.items()
             })
-    return {"connectors": connectors, "total": len(connectors)}
+    return APIResponse(data={"connectors": connectors, "total": len(connectors)})
 
 
 @router.post("/marketplace/publish")
@@ -283,7 +297,6 @@ async def install_marketplace_connector(connector_id: str, request: Request, aut
     key = f"connector:{connector_id}"
     exists = await redis.exists(key)
     if not exists:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Marketplace connector not found")
+        raise AppError(ErrorCode.NOT_FOUND, "Marketplace connector not found")
     new_count = await redis.hincrby(key, "install_count", 1)
     return {"success": True, "connector_id": connector_id, "install_count": new_count}

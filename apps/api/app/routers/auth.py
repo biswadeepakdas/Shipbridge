@@ -1,9 +1,10 @@
 """Auth routes — token exchange, API key management, signup/signin."""
 
+import re
 import uuid
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
@@ -35,6 +36,10 @@ class ExchangeRequest(BaseModel):
     tenant_id: str | None = None
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]{1,62}[a-z0-9]$")
+
+
 class SignupRequest(BaseModel):
     """Register a new user and create their tenant."""
 
@@ -43,6 +48,20 @@ class SignupRequest(BaseModel):
     tenant_name: str
     tenant_slug: str
     supabase_uid: str | None = None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        if not _EMAIL_RE.match(v) or len(v) > 254:
+            raise ValueError("Invalid email address")
+        return v.lower().strip()
+
+    @field_validator("tenant_slug")
+    @classmethod
+    def validate_slug(cls, v: str) -> str:
+        if not _SLUG_RE.match(v):
+            raise ValueError("Slug must be 3-64 lowercase alphanumeric chars or hyphens")
+        return v
 
 
 class SignupResponse(BaseModel):

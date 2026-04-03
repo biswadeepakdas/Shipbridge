@@ -2,8 +2,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_client import AsyncWebClient
 import structlog
 
 from app.integrations.adapter import ConnectorAdapter, ConnectorHealthResult, NormalizedData
@@ -18,7 +18,7 @@ class SlackAdapter(ConnectorAdapter):
 
     def __init__(self, bot_token: str = "") -> None:
         self.bot_token = bot_token
-        self.client = WebClient(token=bot_token)
+        self.client = AsyncWebClient(token=bot_token)
 
     async def fetch(self, query: dict) -> dict[str, Any]:
         """Fetch data from Slack API.
