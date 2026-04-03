@@ -45,18 +45,69 @@ class DeploymentActivities:
 
     @activity.defn
     async def collect_real_metrics(self, stage: str, project_id: str) -> StageMetrics:
-        """
-        Collect real metrics from the running service.
-        In this sprint, we hook into the actual metrics DB/logs.
-        """
-        # Placeholder for real metric collection logic
-        # In a real app, this would query Prometheus/Datadog/PostgreSQL
-        return StageMetrics(
-            task_success_rate=0.98,
-            latency_p95_ms=240.0,
-            token_cost_per_task=0.015,
-            error_rate=0.01
-        )
+        """Collect real deployment metrics from Redis counters."""
+        try:
+            import redis.asyncio as aioredis
+
+            settings = get_settings()
+            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+            # Read metrics from Redis keys set during deployment
+            success_key = f"deploy:metrics:{stage}:{project_id}:success"
+            fail_key = f"deploy:metrics:{stage}:{project_id}:fail"
+            latency_key = f"deploy:metrics:{stage}:{project_id}:latencies"
+
+            success = int(await r.get(success_key) or 0)
+            failures = int(await r.get(fail_key) or 0)
+            total = success + failures
+
+            success_rate = success / total if total > 0 else 0.0
+            error_rate = failures / total if total > 0 else 0.0
+
+            # Get p95 latency from list of recorded latency values
+            latencies = await r.lrange(latency_key, 0, -1)
+            if latencies:
+                lat_values = sorted([float(v) for v in latencies])
+                p95_idx = int(len(lat_values) * 0.95)
+                p95_latency = lat_values[min(p95_idx, len(lat_values) - 1)]
+            else:
+                p95_latency = 0.0
+
+            await r.aclose()
+
+            logger.info(
+                "metrics_collected",
+                stage=stage,
+                project_id=project_id,
+                success_rate=success_rate,
+                p95_latency=p95_latency,
+                total=total,
+            )
+
+            # If no data yet, return zeros indicating no traffic
+            if total == 0:
+                return StageMetrics(
+                    task_success_rate=0.0,
+                    latency_p95_ms=0.0,
+                    token_cost_per_task=0.0,
+                    error_rate=0.0,
+                )
+
+            return StageMetrics(
+                task_success_rate=round(success_rate, 4),
+                latency_p95_ms=round(p95_latency, 1),
+                token_cost_per_task=0.0,  # Computed by cost modeler separately
+                error_rate=round(error_rate, 4),
+            )
+        except Exception as e:
+            logger.warning("metrics_collection_failed", stage=stage, project_id=project_id, error=str(e))
+            # Return zero metrics on failure — do not block deployment
+            return StageMetrics(
+                task_success_rate=0.0,
+                latency_p95_ms=0.0,
+                token_cost_per_task=0.0,
+                error_rate=0.0,
+            )
 
     @activity.defn
     async def update_traffic_pct(self, stage: str, project_id: str, pct: int):

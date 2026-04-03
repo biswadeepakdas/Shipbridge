@@ -63,7 +63,10 @@ export function useApiGet<T>(
     setState({ data: null, error: null, isLoading: true });
 
     try {
-      const response = await fetchWithRetry(url, { signal: controller.signal }, options.retries!, options.retryDelayMs!);
+      const token = typeof window !== "undefined" ? localStorage.getItem("sb_token") : null;
+      const headers: HeadersInit = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const response = await fetchWithRetry(url, { signal: controller.signal, headers }, options.retries!, options.retryDelayMs!);
       const json = (await response.json()) as APIResponse<T>;
 
       if (json.error) {
@@ -97,9 +100,12 @@ export function useApiPost<T, B = unknown>(
     setState({ data: null, error: null, isLoading: true });
 
     try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("sb_token") : null;
+      const reqHeaders: HeadersInit = { "Content-Type": "application/json" };
+      if (token) reqHeaders["Authorization"] = `Bearer ${token}`;
       const response = await fetchWithRetry(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reqHeaders,
         body: JSON.stringify(body),
       }, options.retries!, options.retryDelayMs!);
 

@@ -10,14 +10,9 @@ import PillarCard from "@/components/dashboard/pillar-card";
 import ScoreArc from "@/components/ui/score-arc";
 import IssueList from "@/components/dashboard/issue-list";
 import PageTransition from "@/components/dashboard/page-transition";
-
-interface Issue {
-  title: string;
-  evidence: string;
-  fix_hint: string;
-  severity: string;
-  effort_days: number;
-}
+import { useApiGet } from "@/hooks/use-api";
+import { apiUrl } from "@/lib/api";
+import type { ProjectOut, AssessmentRunOut, Issue } from "@/types/api";
 
 interface PillarData {
   id: string;
@@ -28,7 +23,8 @@ interface PillarData {
   issues: Issue[];
 }
 
-const MOCK_PILLARS: PillarData[] = [
+// Fallback data used when no API data is available
+const FALLBACK_PILLARS: PillarData[] = [
   {
     id: "reliability", label: "Reliability", score: 80, status: "ok",
     note: "Compound accuracy above threshold",
@@ -77,33 +73,63 @@ const DRILLDOWN_VARIANTS = {
 export default function OverviewPage() {
   const [activePillar, setActivePillar] = useState<string | null>(null);
 
+  // Fetch projects — use first project for demo
+  const { data: projects } = useApiGet<ProjectOut[]>(apiUrl("/api/v1/projects"));
+  const projectId = projects?.[0]?.id;
+
+  // Fetch latest assessment for the project
+  const { data: assessments, isLoading } = useApiGet<AssessmentRunOut[]>(
+    projectId ? apiUrl(`/api/v1/projects/${projectId}/assessments`) : null
+  );
+
+  // Convert API assessment data to pillar display format
+  const pillars = useMemo(() => {
+    if (!assessments || assessments.length === 0) return FALLBACK_PILLARS;
+    const latest = assessments[0];
+    const pillarOrder = ["reliability", "security", "eval", "governance", "cost"];
+    return pillarOrder.map((id) => {
+      const p = latest.scores_json[id];
+      if (!p) return FALLBACK_PILLARS.find((f) => f.id === id)!;
+      return {
+        id,
+        label: id.charAt(0).toUpperCase() + id.slice(1),
+        score: p.score,
+        status: p.status as "ok" | "warn" | "bad",
+        note: p.note,
+        issues: p.issues,
+      };
+    });
+  }, [assessments]);
+
   const handlePillarClick = useCallback((id: string) => {
     setActivePillar((prev) => (prev === id ? null : id));
   }, []);
 
   const totalScore = useMemo(
-    () => Math.round(MOCK_PILLARS.reduce((sum, p) => sum + p.score, 0) / MOCK_PILLARS.length),
-    [],
+    () => Math.round(pillars.reduce((sum, p) => sum + p.score, 0) / pillars.length),
+    [pillars],
   );
 
   const activePillarData = useMemo(
-    () => MOCK_PILLARS.find((p) => p.id === activePillar),
-    [activePillar],
+    () => pillars.find((p) => p.id === activePillar),
+    [activePillar, pillars],
   );
 
   const gapSummary = useMemo(() => {
-    const allIssues = MOCK_PILLARS.flatMap((p) => p.issues);
+    const allIssues = pillars.flatMap((p) => p.issues);
     return {
       total: allIssues.length,
       critical: allIssues.filter((i) => i.severity === "high").length,
       totalDays: allIssues.reduce((sum, i) => sum + i.effort_days, 0),
     };
-  }, []);
+  }, [pillars]);
 
   const handleDownloadPDF = useCallback(async () => {
-    // In production: GET /api/v1/governance/pdf/{projectId}/download
-    const projectId = "demo-project-id";
-    const response = await fetch(`/api/v1/governance/pdf/${projectId}/download`);
+    if (!projectId) return;
+    const token = typeof window !== "undefined" ? localStorage.getItem("sb_token") : null;
+    const headers: HeadersInit = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const response = await fetch(apiUrl(`/api/v1/governance/pdf/${projectId}/download`), { headers });
     if (response.ok) {
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -113,7 +139,7 @@ export default function OverviewPage() {
       a.click();
       window.URL.revokeObjectURL(url);
     }
-  }, []);
+  }, [projectId]);
 
   return (
     <PageTransition pageKey="overview">
@@ -140,6 +166,11 @@ export default function OverviewPage() {
         }
       />
       <div style={{ padding: "24px" }}>
+        {isLoading && (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "48px", fontFamily: FONT.ui, fontSize: 14, color: T.t2 }}>
+            Loading assessment data…
+          </div>
+        )}
         {/* Score + summary row */}
         <div
           style={{
@@ -195,7 +226,7 @@ export default function OverviewPage() {
 
         {/* Pillar cards grid */}
         <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "16px" }}>
-          {MOCK_PILLARS.map((pillar) => (
+          {pillars.map((pillar) => (
             <PillarCard
               key={pillar.id}
               pillar={pillar}

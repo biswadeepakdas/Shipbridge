@@ -2,11 +2,14 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Header from "@/components/dashboard/header";
 import PageTransition from "@/components/dashboard/page-transition";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
+import { useApiGet, useApiPost } from "@/hooks/use-api";
+import { apiUrl } from "@/lib/api";
+import type { RuleListResponse, NormalizationRule } from "@/types/api";
 
 interface DraftRule {
   id: string;
@@ -19,7 +22,18 @@ interface DraftRule {
   unknown_event_sample: string;
 }
 
-const MOCK_RULES: DraftRule[] = [
+const mapRule = (r: NormalizationRule): DraftRule => ({
+  id: r.rule_id,
+  trigger: r.trigger,
+  provider: r.app,
+  generated_at: r.created_at,
+  status: r.status as DraftRule["status"],
+  rule_logic: JSON.stringify(r.payload_map, null, 2),
+  confidence: 0.85, // Not available from API, use default
+  unknown_event_sample: JSON.stringify(r.payload_map),
+});
+
+const FALLBACK_RULES: DraftRule[] = [
   {
     id: "r1",
     trigger: "trello.card_moved",
@@ -53,7 +67,19 @@ const MOCK_RULES: DraftRule[] = [
 ];
 
 export default function RulesPage() {
-  const [rules, setRules] = useState<DraftRule[]>(MOCK_RULES);
+  const { data: ruleData, refetch } = useApiGet<RuleListResponse>(apiUrl("/api/v1/rules"));
+  const { execute: promoteRule } = useApiPost<Record<string, unknown>, { app: string; trigger: string }>(apiUrl("/api/v1/rules/promote"));
+  const { execute: archiveRule } = useApiPost<Record<string, unknown>, { app: string; trigger: string }>(apiUrl("/api/v1/rules/archive"));
+
+  const apiRules = useMemo(() => {
+    if (!ruleData?.rules) return null;
+    return ruleData.rules.map(mapRule);
+  }, [ruleData]);
+  const [rules, setRules] = useState<DraftRule[]>(FALLBACK_RULES);
+
+  useEffect(() => {
+    if (apiRules) setRules(apiRules);
+  }, [apiRules]);
   const [selected, setSelected] = useState<DraftRule | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
@@ -61,20 +87,16 @@ export default function RulesPage() {
   const activeRules = rules.filter((r) => r.status === "active");
 
   const handleApprove = async (rule: DraftRule) => {
-    // In production, this calls: PATCH /api/v1/rules/{rule.id}/approve
-    setRules((prev) =>
-      prev.map((r) => (r.id === rule.id ? { ...r, status: "active" } : r))
-    );
+    await promoteRule({ app: rule.provider, trigger: rule.trigger });
+    refetch();
     setSelected(null);
     setActionMsg(`Rule "${rule.trigger}" approved and is now active.`);
     setTimeout(() => setActionMsg(null), 4000);
   };
 
   const handleReject = async (rule: DraftRule) => {
-    // In production, this calls: PATCH /api/v1/rules/{rule.id}/archive
-    setRules((prev) =>
-      prev.map((r) => (r.id === rule.id ? { ...r, status: "archived" } : r))
-    );
+    await archiveRule({ app: rule.provider, trigger: rule.trigger });
+    refetch();
     setSelected(null);
     setActionMsg(`Rule "${rule.trigger}" rejected and archived.`);
     setTimeout(() => setActionMsg(null), 4000);

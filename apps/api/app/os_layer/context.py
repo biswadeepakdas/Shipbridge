@@ -121,10 +121,129 @@ class ContextAssemblySubsystem:
         key = f"audit:{tenant_id}:{project_id}"
         await self.redis.lpush(key, json.dumps(entry))
         await self.redis.ltrim(key, 0, 999)  # Keep last 1000 entries
+    async def _dense_retrieval(
+        self,
+        tenant_id: uuid.UUID,
+        query_embedding: List[float],
+        project_id: Optional[uuid.UUID],
+        limit: int,
+    ) -> List[RetrievalChunk]:
+        """Dense retrieval using pgvector cosine distance."""
+        try:
+            dense_stmt = (
+                select(
+                    KnowledgeChunk,
+                    KnowledgeChunk.embedding.cosine_distance(query_embedding).label("distance"),
+                )
+                .where(KnowledgeChunk.tenant_id == tenant_id)
+            )
+            if project_id:
+                dense_stmt = dense_stmt.where(KnowledgeChunk.project_id == project_id)
+
+            dense_stmt = dense_stmt.order_by("distance").limit(limit)
+
+            result = await self.db.execute(dense_stmt)
+            chunks = []
+            for row in result:
+                chunk = row[0]
+                chunks.append(RetrievalChunk(
+                    chunk_id=str(chunk.id),
+                    content=chunk.content,
+                    source=chunk.source,
+                    score=round(1 - row[1], 4),
+                    retrieval_method="dense",
+                    metadata=chunk.metadata_json,
+                ))
+            return chunks
+        except Exception:
+            logger.warning("dense_retrieval_failed", exc_info=True)
+            return []
+
+    async def _sparse_retrieval(
+        self,
+        tenant_id: uuid.UUID,
+        query: str,
+        project_id: Optional[uuid.UUID],
+        limit: int,
+    ) -> List[RetrievalChunk]:
+        """Sparse retrieval using PostgreSQL tsvector full-text search."""
+        try:
+            ts_query = func.plainto_tsquery("english", query)
+            sparse_stmt = (
+                select(
+                    KnowledgeChunk,
+                    func.ts_rank(KnowledgeChunk.tsv_content, ts_query).label("rank"),
+                )
+                .where(
+                    KnowledgeChunk.tenant_id == tenant_id,
+                    KnowledgeChunk.tsv_content.op("@@")(ts_query),
+                )
+            )
+            if project_id:
+                sparse_stmt = sparse_stmt.where(KnowledgeChunk.project_id == project_id)
+
+            sparse_stmt = sparse_stmt.order_by(text("rank DESC")).limit(limit)
+
+            result = await self.db.execute(sparse_stmt)
+            chunks = []
+            for row in result:
+                chunk = row[0]
+                chunks.append(RetrievalChunk(
+                    chunk_id=str(chunk.id),
+                    content=chunk.content,
+                    source=chunk.source,
+                    score=round(float(row[1]), 4),
+                    retrieval_method="sparse",
+                    metadata=chunk.metadata_json,
+                ))
+            return chunks
+        except Exception:
+            logger.warning("sparse_retrieval_failed", exc_info=True)
+            return []
+
+    @staticmethod
+    def _reciprocal_rank_fusion(
+        dense: List[RetrievalChunk],
+        sparse: List[RetrievalChunk],
+        limit: int,
+        k: int = 60,
+    ) -> List[RetrievalChunk]:
+        """Merge dense and sparse results using Reciprocal Rank Fusion (RRF).
+
+        RRF score for a document = sum over lists of 1 / (k + rank).
+        ``k`` is a smoothing constant (default 60, per the original paper).
+        """
+        scores: dict[str, float] = {}
+        chunk_map: dict[str, RetrievalChunk] = {}
+
+        for rank, chunk in enumerate(dense, start=1):
+            scores[chunk.chunk_id] = scores.get(chunk.chunk_id, 0.0) + 1.0 / (k + rank)
+            chunk_map[chunk.chunk_id] = chunk
+
+        for rank, chunk in enumerate(sparse, start=1):
+            scores[chunk.chunk_id] = scores.get(chunk.chunk_id, 0.0) + 1.0 / (k + rank)
+            if chunk.chunk_id not in chunk_map:
+                chunk_map[chunk.chunk_id] = chunk
+
+        sorted_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:limit]
+
+        fused: List[RetrievalChunk] = []
+        for cid in sorted_ids:
+            c = chunk_map[cid]
+            fused.append(RetrievalChunk(
+                chunk_id=c.chunk_id,
+                content=c.content,
+                source=c.source,
+                score=round(scores[cid], 6),
+                retrieval_method="hybrid",
+                metadata=c.metadata,
+            ))
+        return fused
+
     async def assemble_context(
-        self, 
-        tenant_id: uuid.UUID, 
-        query: str, 
+        self,
+        tenant_id: uuid.UUID,
+        query: str,
         project_id: Optional[uuid.UUID] = None,
         limit: int = 5
     ) -> AssembledContext:
@@ -133,7 +252,7 @@ class ContextAssemblySubsystem:
         """
         start_time = time.time()
         cache_key = self._generate_cache_key(tenant_id, query, limit)
-        
+
         # 1. Check Redis Cache
         cached_data = await self.redis.get(cache_key)
         if cached_data:
@@ -154,37 +273,32 @@ class ContextAssemblySubsystem:
                 assembled_at=datetime.now(timezone.utc).isoformat()
             )
 
-        # 2. Perform Hybrid Search
+        # 2. Classify intent and generate query embedding
         intent = classify_intent(query)
         query_embedding = await self.get_embeddings(query)
 
-        # Dense retrieval (pgvector)
-        dense_stmt = (
-            select(
-                KnowledgeChunk,
-                KnowledgeChunk.embedding.cosine_distance(query_embedding).label("distance")
-            )
-            .where(KnowledgeChunk.tenant_id == tenant_id)
-        )
-        if project_id:
-            dense_stmt = dense_stmt.where(KnowledgeChunk.project_id == project_id)
-        
-        dense_stmt = dense_stmt.order_by("distance").limit(limit)
-        
-        result = await self.db.execute(dense_stmt)
-        chunks = []
-        for row in result:
-            chunk = row[0]
-            chunks.append(RetrievalChunk(
-                chunk_id=str(chunk.id),
-                content=chunk.content,
-                source=chunk.source,
-                score=round(1 - row[1], 4),
-                retrieval_method="dense",
-                metadata=chunk.metadata_json
-            ))
+        # 3. Perform parallel dense (pgvector) and sparse (tsvector) retrieval
+        # Fetch more candidates than needed so RRF has room to re-rank
+        candidate_limit = limit * 2
 
-        # 3. Update Cache (24h TTL)
+        dense_chunks = await self._dense_retrieval(
+            tenant_id, query_embedding, project_id, candidate_limit
+        )
+        sparse_chunks = await self._sparse_retrieval(
+            tenant_id, query, project_id, candidate_limit
+        )
+
+        # 4. Fuse results with Reciprocal Rank Fusion
+        if dense_chunks and sparse_chunks:
+            chunks = self._reciprocal_rank_fusion(dense_chunks, sparse_chunks, limit)
+        elif dense_chunks:
+            chunks = dense_chunks[:limit]
+        elif sparse_chunks:
+            chunks = sparse_chunks[:limit]
+        else:
+            chunks = []
+
+        # 5. Update Cache (24h TTL)
         chunks_data = [c.model_dump() for c in chunks]
         await self.redis.setex(
             cache_key,
@@ -194,8 +308,8 @@ class ContextAssemblySubsystem:
 
         trace = RetrievalTrace(
             intent=intent,
-            dense_results=len(chunks),
-            sparse_results=0, # Sparse integration pending full RRF implementation
+            dense_results=len(dense_chunks),
+            sparse_results=len(sparse_chunks),
             fused_results=len(chunks),
             cache_hit=False,
             retrieval_time_ms=(time.time() - start_time) * 1000
