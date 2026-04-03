@@ -2,6 +2,7 @@
 
 "use client";
 
+import { useMemo } from "react";
 import Header from "@/components/dashboard/header";
 import PageTransition from "@/components/dashboard/page-transition";
 import StatusTag from "@/components/ui/status-tag";
@@ -42,11 +43,31 @@ const STATUS_MAP: Record<string, { status: "ok" | "warn" | "bad" | "neutral"; la
 };
 
 export default function EventsPage() {
-  // Events API not yet available — using fallback data
-  // When GET /api/v1/events is implemented, replace with:
-  // const { data: eventsData } = useApiGet<EventEntry[]>(apiUrl("/api/v1/events"));
-  const stats = FALLBACK_STATS;
-  const events = FALLBACK_EVENTS;
+  const { data: eventsData } = useApiGet<{
+    events: Array<{ id: string; provider: string; event_type: string; status: string; created_at: string; dedup_key: string }>;
+    stats: { events_today: number; dedup_rate: number; unknown_queue_size: number; dlq_size: number };
+  }>(apiUrl("/api/v1/events"));
+
+  const stats = eventsData?.stats
+    ? {
+        eventsToday: eventsData.stats.events_today,
+        dedupRate: eventsData.stats.dedup_rate,
+        unknownQueueSize: eventsData.stats.unknown_queue_size,
+        dlqSize: eventsData.stats.dlq_size,
+      }
+    : FALLBACK_STATS;
+
+  const events: EventEntry[] = useMemo(() => {
+    if (!eventsData?.events) return FALLBACK_EVENTS;
+    return eventsData.events.map((e) => ({
+      id: e.id,
+      provider: e.provider,
+      eventType: e.event_type,
+      status: e.status as EventEntry["status"],
+      timestamp: new Date(e.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      dedupKey: e.dedup_key,
+    }));
+  }, [eventsData]);
 
   return (
     <PageTransition pageKey="events">
