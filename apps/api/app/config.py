@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     environment: str = get_secret("ENVIRONMENT", default="development")
     log_level: str = get_secret("LOG_LEVEL", default="DEBUG")
     api_base_url: str = get_secret("API_BASE_URL", default="http://localhost:8000")
-    web_base_url: str = get_secret("WEB_BASE_URL", default="http://localhost:3000")
+    web_base_url: str = get_secret("WEB_BASE_URL", default="http://localhost:3000,https://shipbridge-frontend.vercel.app")
 
     # Temporal deployment mode
     use_temporal: bool = False  # Explicitly set USE_TEMPORAL=true in production deployments

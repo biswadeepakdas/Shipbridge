@@ -46,9 +46,10 @@ export function useShipBridgeSocket({
   const connect = useCallback(() => {
     if (!enabled || typeof window === "undefined") return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = process.env.NEXT_PUBLIC_API_HOST ?? window.location.hostname + ":8000";
-    const url = `${protocol}//${host}/ws/${tenantId}`;
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "https://shipbridge-production.up.railway.app";
+    const apiHost = apiBase.replace(/^https?:\/\//, "");
+    const protocol = apiBase.startsWith("https") ? "wss:" : "ws:";
+    const url = `${protocol}//${apiHost}/api/v1/ws/${tenantId}`;
 
     try {
       const ws = new WebSocket(url);
