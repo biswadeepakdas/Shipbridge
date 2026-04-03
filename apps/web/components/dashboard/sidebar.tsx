@@ -51,6 +51,15 @@ const NAV_ITEMS = [
     ),
   },
   {
+    href: "/dashboard/costs",
+    label: "Costs",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+        <path d="M9 2v14M6 5h6M5 9h8M6 13h6" />
+      </svg>
+    ),
+  },
+  {
     href: "/dashboard/rules",
     label: "HITL Gate",
     icon: (
