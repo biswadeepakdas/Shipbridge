@@ -6,6 +6,8 @@ import Header from "@/components/dashboard/header";
 import PageTransition from "@/components/dashboard/page-transition";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
+import { useApiGet } from "@/hooks/use-api";
+import { apiUrl } from "@/lib/api";
 
 interface EventEntry {
   id: string;
@@ -16,14 +18,14 @@ interface EventEntry {
   dedupKey: string;
 }
 
-const MOCK_STATS = {
+const FALLBACK_STATS = {
   eventsToday: 247,
   dedupRate: 0.032,
   unknownQueueSize: 3,
   dlqSize: 0,
 };
 
-const MOCK_EVENTS: EventEntry[] = [
+const FALLBACK_EVENTS: EventEntry[] = [
   { id: "e1", provider: "salesforce", eventType: "deal.closed", status: "processed", timestamp: "14:32:01", dedupKey: "sf:opp-123" },
   { id: "e2", provider: "slack", eventType: "message.new", status: "processed", timestamp: "14:31:45", dedupKey: "sl:msg-456" },
   { id: "e3", provider: "hubspot", eventType: "contact.updated", status: "processed", timestamp: "14:31:22", dedupKey: "hs:ct-789" },
@@ -40,8 +42,11 @@ const STATUS_MAP: Record<string, { status: "ok" | "warn" | "bad" | "neutral"; la
 };
 
 export default function EventsPage() {
-  const stats = MOCK_STATS;
-  const events = MOCK_EVENTS;
+  // Events API not yet available — using fallback data
+  // When GET /api/v1/events is implemented, replace with:
+  // const { data: eventsData } = useApiGet<EventEntry[]>(apiUrl("/api/v1/events"));
+  const stats = FALLBACK_STATS;
+  const events = FALLBACK_EVENTS;
 
   return (
     <PageTransition pageKey="events">
