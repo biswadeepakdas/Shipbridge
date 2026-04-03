@@ -150,7 +150,7 @@ def detect_framework(file_list: List[str], file_contents: Optional[Dict[str, str
     # Check file contents
     if file_contents:
         for path, content in file_contents.items():
-            for framework, patterns in FRAMEWORK_PATTERters.items():
+            for framework, patterns in FRAMEWORK_PATTERNS.items():
                 if any(p in content for p in patterns):
                     detected_frameworks.add(framework)
 
