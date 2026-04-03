@@ -10,7 +10,7 @@ import { T, FONT } from "@/styles/tokens";
 import { useApiGet } from "@/hooks/use-api";
 import { apiUrl } from "@/lib/api";
 
-interface EventEntry {
+interface EventDisplay {
   id: string;
   provider: string;
   eventType: string;
@@ -26,7 +26,7 @@ const FALLBACK_STATS = {
   dlqSize: 0,
 };
 
-const FALLBACK_EVENTS: EventEntry[] = [
+const FALLBACK_EVENTS: EventDisplay[] = [
   { id: "e1", provider: "salesforce", eventType: "deal.closed", status: "processed", timestamp: "14:32:01", dedupKey: "sf:opp-123" },
   { id: "e2", provider: "slack", eventType: "message.new", status: "processed", timestamp: "14:31:45", dedupKey: "sl:msg-456" },
   { id: "e3", provider: "hubspot", eventType: "contact.updated", status: "processed", timestamp: "14:31:22", dedupKey: "hs:ct-789" },
@@ -57,13 +57,13 @@ export default function EventsPage() {
       }
     : FALLBACK_STATS;
 
-  const events: EventEntry[] = useMemo(() => {
+  const events: EventDisplay[] = useMemo(() => {
     if (!eventsData?.events) return FALLBACK_EVENTS;
     return eventsData.events.map((e) => ({
       id: e.id,
       provider: e.provider,
       eventType: e.event_type,
-      status: e.status as EventEntry["status"],
+      status: e.status as EventDisplay["status"],
       timestamp: new Date(e.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       dedupKey: e.dedup_key,
     }));

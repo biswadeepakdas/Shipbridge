@@ -43,11 +43,16 @@ export default function LoginPage() {
       }
 
       // Store auth data
-      if (json.data?.access_token) {
-        localStorage.setItem("sb_token", json.data.access_token);
+      const tokenValue = json.data?.token?.access_token ?? json.data?.access_token;
+      if (tokenValue) {
+        localStorage.setItem("sb_token", tokenValue);
       }
-      if (json.data?.tenant) {
-        localStorage.setItem("sb_tenant", JSON.stringify(json.data.tenant));
+      if (json.data?.tenant_id) {
+        localStorage.setItem("sb_tenant", JSON.stringify({
+          id: json.data.tenant_id,
+          name: tenantName.trim() || `${fullName.trim()}'s Workspace`,
+          slug: slug,
+        }));
       }
 
       router.push("/dashboard");

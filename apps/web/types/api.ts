@@ -15,7 +15,7 @@ export interface Issue {
   title: string;
   evidence: string;
   fix_hint: string;
-  severity: string;
+  severity: "high" | "medium" | "low";
   effort_days: number;
 }
 
@@ -27,8 +27,10 @@ export interface PillarScore {
 }
 
 export interface GapReport {
-  ranked_issues: Issue[];
-  total_effort_days: number;
+  blockers: Issue[];
+  total_issues: number;
+  critical_count: number;
+  estimated_effort_days: number;
 }
 
 export interface AssessmentRunOut {
@@ -77,8 +79,10 @@ export interface ConnectorOut {
   circuit_breaker: {
     state: string;
     failure_count: number;
-    success_count: number;
-    last_failure_time: string | null;
+    last_failure_time: number | null;
+    last_success_time: number | null;
+    total_requests: number;
+    total_failures: number;
   } | null;
   latest_health: {
     status: string;
@@ -96,4 +100,13 @@ export interface EventEntry {
   tenant_id: string | null;
   created_at: string;
   dedup_key: string;
+}
+
+export interface ReadinessGateResponse {
+  can_deploy: boolean;
+  current_score: number;
+  target_score: number;
+  gap: number;
+  remediation_steps: number;
+  estimated_days: number;
 }

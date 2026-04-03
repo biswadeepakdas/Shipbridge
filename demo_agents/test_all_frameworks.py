@@ -196,7 +196,7 @@ def signup_if_needed(client: httpx.Client) -> str:
     }, headers={"Content-Type": "application/json"})
     if resp.status_code == 200:
         data = resp.json().get("data", {})
-        return data.get("access_token", "")
+        return data.get("token", {}).get("access_token", "")
     return ""
 
 
@@ -293,8 +293,8 @@ def main():
 
         # Step 4: Gap report summary
         gap_report = assessment.get("gap_report_json", {})
-        ranked = gap_report.get("ranked_issues", [])
-        total_days = gap_report.get("total_effort_days", 0)
+        ranked = gap_report.get("blockers", [])
+        total_days = gap_report.get("estimated_effort_days", 0)
         if ranked:
             print(f"\n   📋 Gap Report: {len(ranked)} issues, {total_days} days estimated effort")
 

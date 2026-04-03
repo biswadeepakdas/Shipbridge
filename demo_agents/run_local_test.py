@@ -278,8 +278,8 @@ async def main():
             total_score = assessment.get("total_score", 0)
             scores = assessment.get("scores_json", {})
             gap_report = assessment.get("gap_report_json", {})
-            ranked = gap_report.get("ranked_issues", [])
-            total_days = gap_report.get("total_effort_days", 0)
+            ranked = gap_report.get("blockers", [])
+            total_days = gap_report.get("estimated_effort_days", 0)
             passed = total_score >= 75
 
             print(f"\n   📊 Total Score: {total_score}/100 — {'PASS ✅' if passed else 'FAIL ❌'}")
