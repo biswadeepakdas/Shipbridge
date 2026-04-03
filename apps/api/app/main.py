@@ -39,21 +39,30 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(settings.log_level)
     logger.info("shipbridge_api_starting", environment=settings.environment)
 
+    # Validate JWT secret in production
+    if settings.environment != "development" and settings.jwt_secret == "change-me-in-production":
+        logger.critical("jwt_secret_insecure", message="JWT_SECRET must be changed in non-development environments!")
+        raise RuntimeError("Insecure JWT_SECRET detected. Set JWT_SECRET environment variable.")
+
     # Initialize Sentry
     setup_sentry()
 
-    # Test Redis connectivity (non-fatal)
+    # Initialize Redis connection pool (non-fatal)
     try:
         import redis.asyncio as aioredis
 
-        r = aioredis.from_url(settings.redis_url)
-        await r.ping()
-        await r.aclose()
+        _app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        await _app.state.redis.ping()
         logger.info("redis_connected")
     except Exception:
+        _app.state.redis = None
         logger.warning("redis_unavailable", url=settings.redis_url)
 
     yield
+
+    # Cleanup Redis
+    if hasattr(_app.state, "redis") and _app.state.redis:
+        await _app.state.redis.aclose()
 
     logger.info("shipbridge_api_shutting_down")
 
@@ -74,7 +83,7 @@ from app.middleware.guardrails import GuardrailsMiddleware
 app.add_middleware(GuardrailsMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[get_settings().web_base_url],
+    allow_origins=[o.strip() for o in get_settings().web_base_url.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

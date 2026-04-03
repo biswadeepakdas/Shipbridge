@@ -45,6 +45,11 @@ class GuardrailsMiddleware(BaseHTTPMiddleware):
         async for chunk in response.body_iterator:
             body_bytes += chunk
 
+        # Skip PII scan for large responses to prevent memory spikes
+        if len(body_bytes) > 1_048_576:  # 1 MB
+            logger.warning("guardrails_skip_large_response", size=len(body_bytes))
+            return Response(content=body_bytes, status_code=response.status_code, headers=dict(response.headers), media_type=response.media_type)
+
         try:
             body_text = body_bytes.decode("utf-8")
             results = self.analyzer.analyze(text=body_text, language="en",
