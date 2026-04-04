@@ -192,6 +192,22 @@ async def _ingest_repo(repo_url: str) -> dict:
     mcp_endpoints_raw = re.findall(r'["\'](/tools/[^"\']+)["\']', all_content)
     mcp_auth = "mcp_auth" in all_content or ("mcp" in all_content and auth_type != "none")
 
+    # Detect eval-related signals
+    eval_baseline = any(kw in all_content for kw in ["baseline", "golden_dataset", "eval_baseline", "benchmark"])
+    eval_dataset = any(kw in all_content for kw in ["eval_dataset", "test_dataset", "evaluation_data", "fixtures"])
+    secrets_vault = any(kw in all_content for kw in ["vault", "secret_manager", "aws_secrets", "keyring", "dotenv"])
+
+    # Cost-related signals
+    semantic_cache = any(kw in all_content for kw in ["semantic_cache", "cache_embedding", "redis_cache", "lru_cache", "diskcache"])
+    token_budget = any(kw in all_content for kw in ["token_budget", "max_tokens", "token_limit", "rate_limit", "throttle"])
+
+    # Owner detection (look for CODEOWNERS, maintainers, author fields)
+    owner = ""
+    codeowners_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', all_content)
+    if codeowners_match:
+        owner = codeowners_match.group(0)
+
+    # Build stack_json with ALL field names the scorers expect
     stack_json: dict = {
         "repo_url": repo_url,
         "detected_framework": detected_fw,
@@ -199,11 +215,19 @@ async def _ingest_repo(repo_url: str) -> dict:
         "tools": tools_used,
         "deployment": deployment,
         "test_coverage": test_coverage,
-        "has_ci": has_ci,
+        "ci_grader": has_ci,        # EvalScorer checks "ci_grader"
+        "user_input": True,          # Assume agents accept user input
         "injection_guard": injection_guard,
         "audit_trail": audit_trail,
         "hitl_gates": hitl_gates,
+        "eval_baseline": eval_baseline,
+        "eval_dataset": eval_dataset,
+        "secrets_vault": secrets_vault,
+        "semantic_cache": semantic_cache,
+        "token_budget": token_budget,
     }
+    if owner:
+        stack_json["owner"] = owner
     if auth_type != "none":
         stack_json["auth"] = {"type": auth_type, "provider": auth_provider}
     if mcp_endpoints_raw:
