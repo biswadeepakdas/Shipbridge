@@ -8,6 +8,12 @@ import { T, FONT } from "@/styles/tokens";
 import ScoreArc from "@/components/ui/score-arc";
 import { apiUrl } from "@/lib/api";
 
+type IngestedStack = {
+  repo_url: string;
+  detected_framework: string;
+  stack_json: Record<string, unknown>;
+} | null;
+
 const FRAMEWORKS = [
   { id: "langraph", name: "LangGraph", desc: "Graph-based agent orchestration" },
   { id: "crewai", name: "CrewAI", desc: "Multi-agent crew collaboration" },
@@ -15,6 +21,71 @@ const FRAMEWORKS = [
   { id: "n8n", name: "n8n", desc: "Workflow automation platform" },
   { id: "custom", name: "Custom", desc: "Custom agent framework" },
 ];
+
+// Framework-specific default stack configurations for realistic assessments
+const FRAMEWORK_STACKS: Record<string, Record<string, unknown>> = {
+  langraph: {
+    models: ["claude-sonnet-4", "claude-haiku-4-5"],
+    tools: ["knowledge_base_search", "api_caller", "data_retriever"],
+    deployment: "railway",
+    auth: { type: "jwt", provider: "supabase" },
+    injection_guard: true,
+    user_input: true,
+    ci_grader: true,
+    test_coverage: 72,
+    eval_baseline: true,
+    audit_trail: true,
+    hitl_gates: true,
+    owner: "team@company.com",
+    semantic_cache: true,
+    token_budget: true,
+  },
+  crewai: {
+    models: ["claude-sonnet-4", "claude-haiku-4-5", "gpt-4o-mini"],
+    tools: ["web_search", "file_reader", "email_sender", "slack_notify"],
+    deployment: "railway",
+    auth: { type: "api_key", provider: "custom" },
+    user_input: true,
+    ci_grader: true,
+    test_coverage: 65,
+    eval_baseline: true,
+    audit_trail: true,
+    hitl_gates: true,
+    owner: "ops@company.com",
+    semantic_cache: true,
+    token_budget: true,
+  },
+  autogen: {
+    models: ["gpt-4o", "gpt-4o-mini"],
+    tools: ["code_executor", "web_browser", "file_manager"],
+    deployment: "railway",
+    auth: { type: "oauth2", provider: "github" },
+    injection_guard: true,
+    user_input: true,
+    mcp_endpoints: ["/tools/code", "/tools/browser"],
+    mcp_auth: true,
+    test_coverage: 45,
+    owner: "dev@company.com",
+  },
+  n8n: {
+    models: ["claude-haiku-4-5"],
+    tools: ["slack_bot", "notion_reader", "google_calendar", "email_processor"],
+    deployment: "docker",
+    auth: { type: "basic", provider: "n8n" },
+    user_input: true,
+    test_coverage: 30,
+    audit_trail: true,
+    owner: "ops@company.com",
+  },
+  custom: {
+    models: ["gpt-4o"],
+    tools: ["web_browser", "code_executor"],
+    deployment: "docker",
+    user_input: true,
+    mcp_endpoints: ["/tools/browser", "/tools/code"],
+    test_coverage: 20,
+  },
+};
 
 // Module-level variants
 const STEP_VARIANTS = {
@@ -30,6 +101,10 @@ export default function OnboardingPage() {
   const [projectName, setProjectName] = useState("");
   const [framework, setFramework] = useState("");
   const [score, setScore] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState("");
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [ingestedStack, setIngestedStack] = useState<IngestedStack>(null);
 
   const canAdvance = useMemo(() => {
     if (step === 1) return projectName.trim().length > 0;
@@ -39,7 +114,41 @@ export default function OnboardingPage() {
 
   const [isAssessing, setIsAssessing] = useState(false);
 
+  const handleIngestRepo = useCallback(async () => {
+    if (!repoUrl.trim()) return;
+    setIsIngesting(true);
+    setError(null);
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("sb_token") : null;
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const res = await fetch(apiUrl("/api/v1/onboarding/ingest-repo"), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ repo_url: repoUrl.trim() }),
+      });
+      const json = await res.json();
+      if (json.data?.stack_json) {
+        setIngestedStack(json.data);
+        const fw = json.data.detected_framework;
+        // Map detected to UI framework id
+        const fwMap: Record<string, string> = {
+          crewai: "crewai", autogen: "autogen", langchain: "langraph",
+          llamaindex: "langraph", n8n: "n8n",
+        };
+        if (fwMap[fw]) setFramework(fwMap[fw]);
+      } else {
+        setError(json.error?.message ?? "Failed to ingest repository. Make sure it is a public GitHub repo.");
+      }
+    } catch {
+      setError("Connection failed. Could not reach the API.");
+    } finally {
+      setIsIngesting(false);
+    }
+  }, [repoUrl]);
+
   const handleNext = useCallback(async () => {
+    setError(null);
     if (step === 3) {
       setIsAssessing(true);
       try {
@@ -47,11 +156,14 @@ export default function OnboardingPage() {
         const headers: HeadersInit = { "Content-Type": "application/json" };
         if (token) headers["Authorization"] = `Bearer ${token}`;
 
+        // Use real ingested stack if available, otherwise fall back to defaults
+        const stackJson = ingestedStack?.stack_json ?? FRAMEWORK_STACKS[framework] ?? {};
+
         // Create project
         const createRes = await fetch(apiUrl("/api/v1/projects"), {
           method: "POST",
           headers,
-          body: JSON.stringify({ name: projectName, framework, stack_json: {} }),
+          body: JSON.stringify({ name: projectName, framework, stack_json: stackJson }),
         });
         const createJson = await createRes.json();
         const projectId = createJson.data?.id;
@@ -63,12 +175,19 @@ export default function OnboardingPage() {
             headers,
           });
           const assessJson = await assessRes.json();
-          setScore(assessJson.data?.total_score ?? 72);
+          if (assessJson.data?.total_score !== undefined) {
+            setScore(assessJson.data.total_score);
+          } else {
+            setError("Assessment failed. Please try again.");
+            return;
+          }
         } else {
-          setScore(72); // Fallback if project creation fails
+          setError(createJson.error?.message ?? "Failed to create project. Please sign in first.");
+          return;
         }
       } catch {
-        setScore(72); // Fallback on network error
+        setError("Connection failed. Please check your network and try again.");
+        return;
       } finally {
         setIsAssessing(false);
       }
@@ -76,7 +195,7 @@ export default function OnboardingPage() {
     } else if (step < 4) {
       setStep((s) => (s + 1) as Step);
     }
-  }, [step, projectName, framework]);
+  }, [step, projectName, framework, ingestedStack]);
 
   const handleBack = useCallback(() => {
     if (step > 1) setStep((s) => (s - 1) as Step);
@@ -102,6 +221,17 @@ export default function OnboardingPage() {
       <div style={{ width: 320, height: 3, backgroundColor: T.b1, borderRadius: 2, marginBottom: 32 }}>
         <div style={{ width: `${(step / 4) * 100}%`, height: "100%", backgroundColor: T.sig, borderRadius: 2, transition: "width 0.3s ease" }} />
       </div>
+
+      {/* Error display */}
+      {error && (
+        <div style={{
+          width: 400, padding: "10px 16px", marginBottom: 16, borderRadius: 6,
+          backgroundColor: "rgba(196,74,74,0.1)", border: "1px solid rgba(196,74,74,0.3)",
+          fontFamily: FONT.ui, fontSize: 13, color: T.danger,
+        }}>
+          {error}
+        </div>
+      )}
 
       {/* Step content */}
       <div style={{ width: 400, minHeight: 280 }}>
@@ -170,16 +300,68 @@ export default function OnboardingPage() {
                   Configure stack
                 </h2>
                 <p style={{ fontFamily: FONT.ui, fontSize: 13, color: T.t3, marginBottom: 20 }}>
-                  We&apos;ve pre-filled a configuration for {FRAMEWORKS.find((f) => f.id === framework)?.name ?? "your framework"}.
-                  You can customize this later.
+                  Paste your GitHub repo URL for a real analysis, or use the default config for {FRAMEWORKS.find((f) => f.id === framework)?.name ?? "your framework"}.
                 </p>
+
+                {/* GitHub repo ingestion */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontFamily: FONT.ui, fontSize: 12, fontWeight: 500, color: T.t2, marginBottom: 6 }}>
+                    Import from GitHub (optional)
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      value={repoUrl}
+                      onChange={(e) => setRepoUrl(e.target.value)}
+                      placeholder="https://github.com/owner/repo"
+                      style={{
+                        flex: 1, padding: "10px 12px", borderRadius: 6,
+                        border: `1px solid ${ingestedStack ? T.sig : T.b2}`,
+                        backgroundColor: T.s2, color: T.t1,
+                        fontFamily: FONT.ui, fontSize: 13, outline: "none",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleIngestRepo}
+                      disabled={isIngesting || !repoUrl.trim()}
+                      style={{
+                        padding: "10px 14px", borderRadius: 6, border: "none",
+                        backgroundColor: repoUrl.trim() ? T.sig : T.s3,
+                        color: repoUrl.trim() ? T.s0 : T.t4,
+                        fontFamily: FONT.ui, fontSize: 12, fontWeight: 500,
+                        cursor: repoUrl.trim() ? "pointer" : "not-allowed", whiteSpace: "nowrap",
+                      }}
+                    >
+                      {isIngesting ? "Scanning..." : "Analyze"}
+                    </button>
+                  </div>
+                  {ingestedStack && (
+                    <div style={{
+                      marginTop: 8, padding: "8px 12px", borderRadius: 6,
+                      backgroundColor: "rgba(56,189,148,0.08)", border: "1px solid rgba(56,189,148,0.3)",
+                      fontFamily: FONT.ui, fontSize: 12, color: T.sig,
+                    }}>
+                      Detected: <strong>{ingestedStack.detected_framework}</strong> — using real repo data for assessment
+                    </div>
+                  )}
+                </div>
+
                 <div style={{
                   padding: 16, backgroundColor: T.s2, borderRadius: 8,
                   border: `1px solid ${T.b0}`, fontFamily: FONT.data, fontSize: 12, color: T.t2,
                 }}>
                   <div>Project: <span style={{ color: T.t1 }}>{projectName}</span></div>
                   <div>Framework: <span style={{ color: T.sig }}>{framework}</span></div>
-                  <div style={{ marginTop: 8, color: T.t3 }}>Click &quot;Run Assessment&quot; to score your project.</div>
+                  {ingestedStack ? (
+                    <>
+                      <div style={{ marginTop: 8 }}>Models: <span style={{ color: T.t1 }}>{(ingestedStack.stack_json.models as string[] | undefined)?.join(", ") ?? "—"}</span></div>
+                      <div>Tools: <span style={{ color: T.t1 }}>{((ingestedStack.stack_json.tools as string[] | undefined)?.length ?? 0)} detected</span></div>
+                      <div>Tests: <span style={{ color: T.t1 }}>{String(ingestedStack.stack_json.test_coverage ?? 0)}% coverage</span></div>
+                      <div style={{ marginTop: 4, color: "#38BD94" }}>Real repo analysis will be used for scoring.</div>
+                    </>
+                  ) : (
+                    <div style={{ marginTop: 8, color: T.t3 }}>Using default config. Paste a GitHub URL above for real analysis.</div>
+                  )}
                 </div>
               </div>
             )}

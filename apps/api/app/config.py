@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     github_app_id: str = get_secret("GITHUB_APP_ID", default="")
     github_webhook_secret: str = get_secret("GITHUB_WEBHOOK_SECRET", default="")
     github_private_key: str = get_github_private_key()
+    github_token: str = get_secret("GITHUB_TOKEN", default="")  # Personal access token for repo ingestion
 
     # Salesforce
     salesforce_username: str | None = get_secret("SALESFORCE_USERNAME")
