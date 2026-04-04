@@ -52,11 +52,25 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         from app.db import engine, Base
         import app.models  # noqa: F401 — register all models
+
+        # Filter out tables with columns that need extensions (pgvector, tsvector)
+        # These will be created by Alembic migrations that also enable the extensions
+        safe_tables = []
+        for table in Base.metadata.sorted_tables:
+            skip = False
+            for col in table.columns:
+                col_type = str(col.type).upper()
+                if "TSVECTOR" in col_type or "VECTOR" in col_type:
+                    skip = True
+                    break
+            if not skip:
+                safe_tables.append(table)
+
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("database_tables_ready")
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=safe_tables))
+        logger.info("database_tables_ready", tables_created=len(safe_tables))
     except Exception as e:
-        logger.warning("database_table_creation_failed", error=str(e))
+        logger.error("database_table_creation_failed", error=str(e))
 
     # Initialize Redis connection pool (non-fatal)
     try:
