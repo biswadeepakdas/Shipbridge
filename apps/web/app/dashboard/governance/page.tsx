@@ -7,7 +7,7 @@ import Header from "@/components/dashboard/header";
 import PageTransition from "@/components/dashboard/page-transition";
 import StatusTag from "@/components/ui/status-tag";
 import { T, FONT } from "@/styles/tokens";
-import { useApiGet, useApiPost } from "@/hooks/use-api";
+import { useApiGet } from "@/hooks/use-api";
 import { apiUrl } from "@/lib/api";
 
 type Tab = "hitl" | "audit";
@@ -55,15 +55,12 @@ const GATE_STATUS: Record<string, { status: "ok" | "warn" | "bad" | "neutral"; l
 export default function GovernancePage() {
   const [tab, setTab] = useState<Tab>("hitl");
 
-  const { data: gates, mutate: refreshGates } = useApiGet<HITLGate[]>(
+  const { data: gates, refetch: refreshGates } = useApiGet<HITLGate[]>(
     apiUrl("/api/v1/governance/gates")
   );
   const { data: auditEntries } = useApiGet<AuditEntry[]>(
     apiUrl("/api/v1/governance/audit")
   );
-
-  const { execute: approveGate } = useApiPost(apiUrl(""));
-  const { execute: rejectGate } = useApiPost(apiUrl(""));
 
   const handleApprove = useCallback(async (gateId: string) => {
     const token = typeof window !== "undefined" ? localStorage.getItem("sb_token") : null;
