@@ -82,9 +82,20 @@ from app.middleware.rate_limit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
 from app.middleware.guardrails import GuardrailsMiddleware
 app.add_middleware(GuardrailsMiddleware)
+# Build CORS origins from env + known deployments
+_cors_origins = [o.strip() for o in get_settings().web_base_url.split(",")]
+_known_origins = [
+    "https://shipbridge-frontend.vercel.app",
+    "https://shipbridge-frontend-biswadeepakdas-projects.vercel.app",
+    "http://localhost:3000",
+]
+for origin in _known_origins:
+    if origin not in _cors_origins:
+        _cors_origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in get_settings().web_base_url.split(",")],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
