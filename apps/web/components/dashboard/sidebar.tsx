@@ -2,8 +2,8 @@
 
 "use client";
 
-import React, { useMemo } from "react";
-import { usePathname } from "next/navigation";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { T, FONT } from "@/styles/tokens";
 import NavItem from "@/components/ui/nav-item";
 
@@ -82,6 +82,19 @@ const Sidebar = React.memo(function Sidebar({
   readinessScore,
 }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    setIsLoggedIn(!!localStorage.getItem("sb_token"));
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem("sb_token");
+    localStorage.removeItem("sb_tenant");
+    setIsLoggedIn(false);
+    router.push("/login");
+  }, [router]);
 
   const scoreColor = readinessScore
     ? readinessScore >= 75 ? T.sig : readinessScore >= 50 ? T.warn : T.danger
@@ -154,9 +167,60 @@ const Sidebar = React.memo(function Sidebar({
         ))}
       </nav>
 
-      {/* Version */}
-      <div style={{ padding: "12px 8px 0", borderTop: `1px solid ${T.b0}` }}>
-        <span style={{ fontFamily: FONT.data, fontSize: 10, color: T.t4 }}>
+      {/* New Project + Auth */}
+      <div style={{ padding: "12px 8px 0", borderTop: `1px solid ${T.b0}`, display: "flex", flexDirection: "column", gap: "8px" }}>
+        <a
+          href="/onboarding"
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+            padding: "8px 12px", borderRadius: "6px", border: `1px solid ${T.b1}`,
+            backgroundColor: "transparent", color: T.sig,
+            fontFamily: FONT.ui, fontSize: 12, fontWeight: 500,
+            textDecoration: "none", cursor: "pointer", transition: "all 0.15s",
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <path d="M7 2v10M2 7h10" />
+          </svg>
+          New Project
+        </a>
+
+        {isLoggedIn ? (
+          <button
+            onClick={handleLogout}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              padding: "8px 12px", borderRadius: "6px", border: `1px solid ${T.b0}`,
+              backgroundColor: "transparent", color: T.t3,
+              fontFamily: FONT.ui, fontSize: 12, cursor: "pointer",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+              <path d="M5 2H3a1 1 0 00-1 1v8a1 1 0 001 1h2" />
+              <path d="M9 10l3-3-3-3M12 7H5" />
+            </svg>
+            Sign Out
+          </button>
+        ) : (
+          <a
+            href="/login"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              padding: "8px 12px", borderRadius: "6px", border: "none",
+              backgroundColor: T.sig, color: T.s0,
+              fontFamily: FONT.ui, fontSize: 12, fontWeight: 600,
+              textDecoration: "none", cursor: "pointer",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+              <path d="M9 2h2a1 1 0 011 1v8a1 1 0 01-1 1H9" />
+              <path d="M5 10l-3-3 3-3M2 7h7" />
+            </svg>
+            Sign In
+          </a>
+        )}
+
+        <span style={{ fontFamily: FONT.data, fontSize: 10, color: T.t4, textAlign: "center" }}>
           v0.1.0
         </span>
       </div>
