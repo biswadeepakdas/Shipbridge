@@ -48,6 +48,16 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize Sentry
     setup_sentry()
 
+    # Auto-create database tables if they don't exist
+    try:
+        from app.db import engine, Base
+        import app.models  # noqa: F401 — register all models
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("database_tables_ready")
+    except Exception as e:
+        logger.warning("database_table_creation_failed", error=str(e))
+
     # Initialize Redis connection pool (non-fatal)
     try:
         import redis.asyncio as aioredis
