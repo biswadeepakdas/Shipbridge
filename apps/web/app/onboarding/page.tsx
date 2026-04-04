@@ -16,6 +16,71 @@ const FRAMEWORKS = [
   { id: "custom", name: "Custom", desc: "Custom agent framework" },
 ];
 
+// Framework-specific default stack configurations for realistic assessments
+const FRAMEWORK_STACKS: Record<string, Record<string, unknown>> = {
+  langraph: {
+    models: ["claude-sonnet-4", "claude-haiku-4-5"],
+    tools: ["knowledge_base_search", "api_caller", "data_retriever"],
+    deployment: "railway",
+    auth: { type: "jwt", provider: "supabase" },
+    injection_guard: true,
+    user_input: true,
+    ci_grader: true,
+    test_coverage: 72,
+    eval_baseline: true,
+    audit_trail: true,
+    hitl_gates: true,
+    owner: "team@company.com",
+    semantic_cache: true,
+    token_budget: true,
+  },
+  crewai: {
+    models: ["claude-sonnet-4", "claude-haiku-4-5", "gpt-4o-mini"],
+    tools: ["web_search", "file_reader", "email_sender", "slack_notify"],
+    deployment: "railway",
+    auth: { type: "api_key", provider: "custom" },
+    user_input: true,
+    ci_grader: true,
+    test_coverage: 65,
+    eval_baseline: true,
+    audit_trail: true,
+    hitl_gates: true,
+    owner: "ops@company.com",
+    semantic_cache: true,
+    token_budget: true,
+  },
+  autogen: {
+    models: ["gpt-4o", "gpt-4o-mini"],
+    tools: ["code_executor", "web_browser", "file_manager"],
+    deployment: "railway",
+    auth: { type: "oauth2", provider: "github" },
+    injection_guard: true,
+    user_input: true,
+    mcp_endpoints: ["/tools/code", "/tools/browser"],
+    mcp_auth: true,
+    test_coverage: 45,
+    owner: "dev@company.com",
+  },
+  n8n: {
+    models: ["claude-haiku-4-5"],
+    tools: ["slack_bot", "notion_reader", "google_calendar", "email_processor"],
+    deployment: "docker",
+    auth: { type: "basic", provider: "n8n" },
+    user_input: true,
+    test_coverage: 30,
+    audit_trail: true,
+    owner: "ops@company.com",
+  },
+  custom: {
+    models: ["gpt-4o"],
+    tools: ["web_browser", "code_executor"],
+    deployment: "docker",
+    user_input: true,
+    mcp_endpoints: ["/tools/browser", "/tools/code"],
+    test_coverage: 20,
+  },
+};
+
 // Module-level variants
 const STEP_VARIANTS = {
   enter: { opacity: 0, x: 40 },
@@ -30,6 +95,7 @@ export default function OnboardingPage() {
   const [projectName, setProjectName] = useState("");
   const [framework, setFramework] = useState("");
   const [score, setScore] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const canAdvance = useMemo(() => {
     if (step === 1) return projectName.trim().length > 0;
@@ -40,6 +106,7 @@ export default function OnboardingPage() {
   const [isAssessing, setIsAssessing] = useState(false);
 
   const handleNext = useCallback(async () => {
+    setError(null);
     if (step === 3) {
       setIsAssessing(true);
       try {
@@ -51,7 +118,7 @@ export default function OnboardingPage() {
         const createRes = await fetch(apiUrl("/api/v1/projects"), {
           method: "POST",
           headers,
-          body: JSON.stringify({ name: projectName, framework, stack_json: {} }),
+          body: JSON.stringify({ name: projectName, framework, stack_json: FRAMEWORK_STACKS[framework] ?? {} }),
         });
         const createJson = await createRes.json();
         const projectId = createJson.data?.id;
@@ -63,12 +130,19 @@ export default function OnboardingPage() {
             headers,
           });
           const assessJson = await assessRes.json();
-          setScore(assessJson.data?.total_score ?? 72);
+          if (assessJson.data?.total_score !== undefined) {
+            setScore(assessJson.data.total_score);
+          } else {
+            setError("Assessment failed. Please try again.");
+            return;
+          }
         } else {
-          setScore(72); // Fallback if project creation fails
+          setError(createJson.error?.message ?? "Failed to create project. Please sign in first.");
+          return;
         }
       } catch {
-        setScore(72); // Fallback on network error
+        setError("Connection failed. Please check your network and try again.");
+        return;
       } finally {
         setIsAssessing(false);
       }
@@ -102,6 +176,17 @@ export default function OnboardingPage() {
       <div style={{ width: 320, height: 3, backgroundColor: T.b1, borderRadius: 2, marginBottom: 32 }}>
         <div style={{ width: `${(step / 4) * 100}%`, height: "100%", backgroundColor: T.sig, borderRadius: 2, transition: "width 0.3s ease" }} />
       </div>
+
+      {/* Error display */}
+      {error && (
+        <div style={{
+          width: 400, padding: "10px 16px", marginBottom: 16, borderRadius: 6,
+          backgroundColor: "rgba(196,74,74,0.1)", border: "1px solid rgba(196,74,74,0.3)",
+          fontFamily: FONT.ui, fontSize: 13, color: T.danger,
+        }}>
+          {error}
+        </div>
+      )}
 
       {/* Step content */}
       <div style={{ width: 400, minHeight: 280 }}>
