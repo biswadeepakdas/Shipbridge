@@ -143,5 +143,152 @@ class AuditLogger:
         self._entries.clear()
 
 
-# Singleton
+# Singleton — in-memory fallback
 audit_logger = AuditLogger()
+
+
+class PersistentAuditLogger:
+    """Database-backed audit logger using AuditLogEntry model."""
+
+    async def log(
+        self,
+        db,
+        tenant_id: str,
+        action: AuditAction,
+        resource_type: str,
+        resource_id: str | None = None,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+        details: dict | None = None,
+        ip_address: str | None = None,
+        trace_id: str | None = None,
+    ) -> AuditEntry:
+        """Write an audit entry to the database and return a Pydantic model."""
+        from app.models.ingestion import AuditLogEntry
+
+        entry = AuditLogEntry(
+            tenant_id=uuid.UUID(tenant_id),
+            user_id=uuid.UUID(user_id) if user_id else None,
+            agent_id=agent_id,
+            action=action.value,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details_json=details or {},
+            ip_address=ip_address,
+            trace_id=trace_id,
+        )
+        db.add(entry)
+        await db.commit()
+
+        logger.info("audit_logged_persistent", action=action.value, resource_type=resource_type,
+                    resource_id=resource_id, tenant_id=tenant_id)
+
+        return AuditEntry(
+            id=str(entry.id),
+            tenant_id=tenant_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details=details or {},
+            ip_address=ip_address,
+            trace_id=trace_id,
+            created_at=entry.created_at.isoformat(),
+        )
+
+    async def query(
+        self,
+        db,
+        tenant_id: str,
+        action: AuditAction | None = None,
+        resource_type: str | None = None,
+        limit: int = 50,
+    ) -> list[AuditEntry]:
+        """Query audit entries from the database."""
+        from sqlalchemy import select
+        from app.models.ingestion import AuditLogEntry
+
+        query = select(AuditLogEntry).where(
+            AuditLogEntry.tenant_id == uuid.UUID(tenant_id)
+        )
+        if action:
+            query = query.where(AuditLogEntry.action == action.value)
+        if resource_type:
+            query = query.where(AuditLogEntry.resource_type == resource_type)
+
+        query = query.order_by(AuditLogEntry.created_at.desc()).limit(limit)
+        result = await db.execute(query)
+        rows = result.scalars().all()
+
+        return [
+            AuditEntry(
+                id=str(r.id),
+                tenant_id=str(r.tenant_id),
+                user_id=str(r.user_id) if r.user_id else None,
+                agent_id=r.agent_id,
+                action=AuditAction(r.action),
+                resource_type=r.resource_type,
+                resource_id=r.resource_id,
+                details=r.details_json,
+                ip_address=r.ip_address,
+                trace_id=r.trace_id,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in rows
+        ]
+
+    async def get_stats(self, db, tenant_id: str) -> AuditLogStats:
+        """Get audit log statistics from the database."""
+        from sqlalchemy import func, select
+        from app.models.ingestion import AuditLogEntry
+
+        # Total count
+        total_result = await db.execute(
+            select(func.count(AuditLogEntry.id)).where(
+                AuditLogEntry.tenant_id == uuid.UUID(tenant_id)
+            )
+        )
+        total = total_result.scalar() or 0
+
+        # Actions by type
+        action_result = await db.execute(
+            select(AuditLogEntry.action, func.count(AuditLogEntry.id))
+            .where(AuditLogEntry.tenant_id == uuid.UUID(tenant_id))
+            .group_by(AuditLogEntry.action)
+        )
+        actions_by_type = {row[0]: row[1] for row in action_result.all()}
+
+        # Most active agents
+        agent_result = await db.execute(
+            select(AuditLogEntry.agent_id, func.count(AuditLogEntry.id))
+            .where(
+                AuditLogEntry.tenant_id == uuid.UUID(tenant_id),
+                AuditLogEntry.agent_id.isnot(None),
+            )
+            .group_by(AuditLogEntry.agent_id)
+            .order_by(func.count(AuditLogEntry.id).desc())
+            .limit(5)
+        )
+        most_active = [
+            {"agent_id": row[0], "action_count": row[1]}
+            for row in agent_result.all()
+        ]
+
+        return AuditLogStats(
+            total_entries=total,
+            entries_last_7d=total,  # simplified
+            actions_by_type=actions_by_type,
+            most_active_agents=most_active,
+        )
+
+
+# Singleton persistent logger
+persistent_audit_logger = PersistentAuditLogger()
+
+
+def get_audit_logger(db=None):
+    """Factory: returns PersistentAuditLogger when DB is available, falls back to in-memory."""
+    if db is not None:
+        return persistent_audit_logger
+    return audit_logger

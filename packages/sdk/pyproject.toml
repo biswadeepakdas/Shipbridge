@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shipbridge-sdk"
+version = "0.1.0"
+description = "ShipBridge SDK — instrument your custom AI agent for production readiness scoring"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.24"]
+
+[project.optional-dependencies]
+otel = ["opentelemetry-sdk>=1.20"]

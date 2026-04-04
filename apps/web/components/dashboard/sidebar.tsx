@@ -70,6 +70,27 @@ const NAV_ITEMS = [
       </svg>
     ),
   },
+  {
+    href: "/dashboard/traces",
+    label: "Traces",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+        <path d="M2 14l4-6 3 3 4-7 3 4" />
+        <circle cx="6" cy="8" r="1" />
+        <circle cx="13" cy="4" r="1" />
+      </svg>
+    ),
+  },
+  {
+    href: "/dashboard/governance",
+    label: "Governance",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+        <path d="M9 2l5 3v4c0 3.5-2 6-5 7-3-1-5-3.5-5-7V5z" />
+        <path d="M6.5 9l2 2 3.5-3.5" />
+      </svg>
+    ),
+  },
 ];
 
 interface SidebarProps {

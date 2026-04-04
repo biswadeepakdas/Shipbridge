@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+import sqlalchemy
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assessment.readiness_gate import RemediationPlan, evaluate_readiness
@@ -16,6 +17,8 @@ from app.assessment.runner import AssessmentResult, AssessmentRunner
 from app.db import get_db
 from app.exceptions import AppError, ErrorCode
 from app.middleware.auth import AuthContext, get_auth_context
+from app.models.deployments import DeploymentStage
+from app.models.ingestion import AuditLogEntry, HITLGateRecord, IngestionSource, RuntimeTrace
 from app.models.projects import AssessmentRun, Project
 from app.schemas.response import APIResponse
 
@@ -136,9 +139,160 @@ async def trigger_assessment(
     if not project:
         raise AppError(ErrorCode.NOT_FOUND, f"Project {project_id} not found")
 
-    # Run assessment
+    tenant_uuid = uuid.UUID(auth.tenant_id)
+    project_uuid = uuid.UUID(project_id)
+
+    # --- Collect runtime evidence from DB ---
+    evidence: dict = {}
+
+    # 1. RuntimeTrace stats
+    try:
+        # Fetch all traces for this project to compute stats in Python
+        trace_result = await db.execute(
+            select(RuntimeTrace).where(
+                RuntimeTrace.project_id == project_uuid,
+                RuntimeTrace.tenant_id == tenant_uuid,
+            ).order_by(RuntimeTrace.started_at.desc()).limit(500)
+        )
+        all_traces = trace_result.scalars().all()
+        total = len(all_traces)
+
+        if total > 0:
+            ok_count = sum(1 for t in all_traces if t.status == "ok")
+            error_count = sum(1 for t in all_traces if t.status == "error")
+            avg_duration = sum(t.duration_ms for t in all_traces) / total
+            total_input = sum(t.input_tokens for t in all_traces)
+            total_output = sum(t.output_tokens for t in all_traces)
+
+            # Approximate p95 latency
+            sorted_durations = sorted(t.duration_ms for t in all_traces)
+            p95_idx = min(int(total * 0.95), total - 1)
+            p95_latency = sorted_durations[p95_idx]
+
+            evidence["traces"] = {
+                "total_traces": total,
+                "success_rate": ok_count / total,
+                "error_rate": error_count / total,
+                "avg_duration_ms": round(avg_duration, 1),
+                "p95_latency_ms": round(p95_latency, 1),
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "tool_failure_rate": 0.0,
+            }
+
+            # Tool failure rate
+            tool_traces = [t for t in all_traces if t.tool_name is not None]
+            if tool_traces:
+                tool_errors = sum(1 for t in tool_traces if t.status == "error")
+                evidence["traces"]["tool_failure_rate"] = tool_errors / len(tool_traces)
+
+            # Model distribution
+            model_counts: dict[str, int] = {}
+            for t in all_traces:
+                if t.model:
+                    model_counts[t.model] = model_counts.get(t.model, 0) + 1
+            evidence["traces"]["model_distribution"] = model_counts
+    except Exception:
+        pass  # Evidence collection is best-effort
+
+    # 2. Latest EvalRun
+    try:
+        from app.models.evals import EvalRun
+        eval_result = await db.execute(
+            select(EvalRun)
+            .where(EvalRun.project_id == project_uuid)
+            .order_by(EvalRun.created_at.desc())
+            .limit(1)
+        )
+        eval_run = eval_result.scalar_one_or_none()
+        if eval_run:
+            # pass_rate is stored as integer 0-100, convert to 0-1 scale for scorers
+            raw_rate = eval_run.pass_rate if hasattr(eval_run, "pass_rate") else 0
+            evidence["eval_runs"] = [{
+                "pass_rate": raw_rate / 100.0 if raw_rate > 1 else raw_rate,
+                "dataset_size": eval_run.dataset_size if hasattr(eval_run, "dataset_size") else 0,
+                "status": eval_run.status if hasattr(eval_run, "status") else "unknown",
+            }]
+    except Exception:
+        pass
+
+    # 3. ConnectorHealth (joined through Connector for tenant isolation)
+    try:
+        from app.models.connectors import Connector, ConnectorHealth
+        health_result = await db.execute(
+            select(ConnectorHealth)
+            .join(Connector, ConnectorHealth.connector_id == Connector.id)
+            .where(Connector.tenant_id == tenant_uuid)
+            .order_by(ConnectorHealth.checked_at.desc())
+            .limit(50)
+        )
+        health_records = health_result.scalars().all()
+        if health_records:
+            evidence["connector_health"] = [
+                {"status": h.status, "connector_id": str(h.connector_id), "latency_ms": h.latency_ms}
+                for h in health_records
+            ]
+    except Exception:
+        pass
+
+    # 4. IngestionSource
+    try:
+        ing_result = await db.execute(
+            select(IngestionSource).where(
+                IngestionSource.project_id == project_uuid,
+                IngestionSource.tenant_id == tenant_uuid,
+            )
+        )
+        ing_sources = ing_result.scalars().all()
+        if ing_sources:
+            evidence["ingestion_sources"] = [
+                {"mode": s.mode, "config_json": s.config_json, "status": s.status}
+                for s in ing_sources
+            ]
+    except Exception:
+        pass
+
+    # 5. DeploymentStage history
+    try:
+        dep_result = await db.execute(
+            select(DeploymentStage)
+            .where(DeploymentStage.tenant_id == tenant_uuid)
+            .order_by(DeploymentStage.created_at.desc())
+            .limit(20)
+        )
+        dep_stages = dep_result.scalars().all()
+        if dep_stages:
+            evidence["deployment_history"] = [
+                {"stage_name": s.stage_name, "status": s.status, "deployment_id": s.deployment_id}
+                for s in dep_stages
+            ]
+    except Exception:
+        pass
+
+    # 6. Audit stats
+    try:
+        audit_count_result = await db.execute(
+            select(func.count(AuditLogEntry.id)).where(AuditLogEntry.tenant_id == tenant_uuid)
+        )
+        audit_count = audit_count_result.scalar() or 0
+        evidence["audit_stats"] = {"total_entries": audit_count}
+    except Exception:
+        pass
+
+    # 7. HITL gate count
+    try:
+        hitl_count_result = await db.execute(
+            select(func.count(HITLGateRecord.id)).where(HITLGateRecord.tenant_id == tenant_uuid)
+        )
+        evidence["hitl_gate_count"] = hitl_count_result.scalar() or 0
+    except Exception:
+        pass
+
+    # Run assessment with evidence
     runner = AssessmentRunner()
-    assessment: AssessmentResult = runner.run(project.stack_json, project.framework)
+    assessment: AssessmentResult = runner.run(
+        project.stack_json, project.framework, evidence=evidence or None,
+    )
 
     # Store results
     run = AssessmentRun(

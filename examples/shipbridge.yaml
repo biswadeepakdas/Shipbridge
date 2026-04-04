@@ -1,0 +1,65 @@
+version: "1"
+name: "Customer Support Agent"
+framework: crewai
+description: "AI-powered customer support agent with multi-tool integration"
+
+models:
+  - claude-3-5-sonnet
+  - claude-3-haiku
+
+tools:
+  - name: salesforce_lookup
+    type: api
+    endpoint: https://api.salesforce.com/query
+  - name: knowledge_base
+    type: retrieval
+    endpoint: https://kb.example.com/search
+  - name: ticket_system
+    type: api
+    endpoint: https://support.example.com/api/tickets
+
+connectors:
+  - name: slack
+    type: slack
+    config:
+      channel: "#support"
+  - name: salesforce
+    type: salesforce
+  - name: zendesk
+    type: api
+
+eval_cases:
+  - input: "What is the status of order #12345?"
+    expected_output: "Order #12345 is currently in transit"
+    category: order_status
+  - input: "I want to cancel my subscription"
+    expected_output: "I can help you cancel. Let me pull up your account."
+    category: cancellation
+  - input: "How do I reset my password?"
+    expected_output: "I'll send you a password reset link to your email."
+    category: account_management
+  - input: "I was charged twice for my order"
+    expected_output: "I can see the duplicate charge. Let me process a refund."
+    category: billing
+  - input: "Can I upgrade my plan?"
+    expected_output: "Here are the available upgrade options for your account."
+    category: plan_management
+
+policies:
+  max_latency_ms: 3000
+  max_cost_per_call: 0.05
+  require_hitl:
+    - refund_over_100
+    - account_deletion
+    - plan_downgrade
+
+runtime:
+  endpoint: https://agent.example.com/invoke
+  health_check: https://agent.example.com/health
+  auth_type: api_key
+  auth_header: X-API-Key
+
+deployment:
+  target: railway
+  region: us-east-1
+  auto_rollback: true

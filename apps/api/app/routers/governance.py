@@ -8,8 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.exceptions import AppError, ErrorCode
-from app.governance.audit import AuditAction, AuditEntry, AuditLogStats, audit_logger
-from app.governance.hitl import GateCondition, GateStatus, HumanGate, gate_manager
+from app.governance.audit import (
+    AuditAction,
+    AuditEntry,
+    AuditLogStats,
+    audit_logger,
+    get_audit_logger,
+)
+from app.governance.hitl import (
+    GateCondition,
+    GateStatus,
+    HumanGate,
+    gate_manager,
+    get_gate_manager,
+)
 from app.governance.pdf import ComplianceReport, generate_compliance_report
 from app.middleware.auth import AuthContext, get_auth_context
 from app.models.projects import AssessmentRun, Project
@@ -33,24 +45,38 @@ async def query_audit_log(
     resource_type: str | None = None,
     limit: int = 50,
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[list[AuditEntry]]:
     """Query the immutable audit log for the authenticated tenant."""
+    logger_impl = get_audit_logger(db)
     action_enum = AuditAction(action) if action else None
-    entries = audit_logger.query(
-        tenant_id=auth.tenant_id,
-        action=action_enum,
-        resource_type=resource_type,
-        limit=limit,
-    )
+
+    if hasattr(logger_impl, "query") and logger_impl is not audit_logger:
+        # Persistent logger — pass db
+        entries = await logger_impl.query(
+            db, tenant_id=auth.tenant_id, action=action_enum,
+            resource_type=resource_type, limit=limit,
+        )
+    else:
+        entries = audit_logger.query(
+            tenant_id=auth.tenant_id, action=action_enum,
+            resource_type=resource_type, limit=limit,
+        )
     return APIResponse(data=entries)
 
 
 @router.get("/audit/stats", response_model=APIResponse[AuditLogStats])
 async def audit_stats(
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[AuditLogStats]:
     """Get audit log statistics for the authenticated tenant."""
-    stats = audit_logger.get_stats(auth.tenant_id)
+    logger_impl = get_audit_logger(db)
+
+    if hasattr(logger_impl, "get_stats") and logger_impl is not audit_logger:
+        stats = await logger_impl.get_stats(db, auth.tenant_id)
+    else:
+        stats = audit_logger.get_stats(auth.tenant_id)
     return APIResponse(data=stats)
 
 
@@ -75,18 +101,25 @@ class GateResolveRequest(BaseModel):
 async def create_gate(
     body: GateCreateRequest,
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[HumanGate]:
     """Create a new HITL approval gate."""
-    gate = gate_manager.create_gate(
-        tenant_id=auth.tenant_id,
-        title=body.title,
-        description=body.description,
-        requested_by=auth.user_id,
-        resource_type=body.resource_type,
-        resource_id=body.resource_id,
-        risk_level=body.risk_level,
-        details=body.details,
-    )
+    mgr = get_gate_manager(db)
+
+    if mgr is not gate_manager:
+        gate = await mgr.create_gate(
+            db, tenant_id=auth.tenant_id, title=body.title,
+            description=body.description, requested_by=auth.user_id,
+            resource_type=body.resource_type, resource_id=body.resource_id,
+            risk_level=body.risk_level, details=body.details,
+        )
+    else:
+        gate = gate_manager.create_gate(
+            tenant_id=auth.tenant_id, title=body.title,
+            description=body.description, requested_by=auth.user_id,
+            resource_type=body.resource_type, resource_id=body.resource_id,
+            risk_level=body.risk_level, details=body.details,
+        )
     return APIResponse(data=gate)
 
 
@@ -94,12 +127,21 @@ async def create_gate(
 async def list_gates(
     status: str | None = None,
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[list[HumanGate]]:
     """List HITL gates. Filter by status (pending/approved/rejected)."""
-    if status == "pending":
-        gates = gate_manager.list_pending(auth.tenant_id)
+    mgr = get_gate_manager(db)
+
+    if mgr is not gate_manager:
+        if status == "pending":
+            gates = await mgr.list_pending(db, auth.tenant_id)
+        else:
+            gates = await mgr.list_all(db, auth.tenant_id)
     else:
-        gates = gate_manager.list_all(auth.tenant_id)
+        if status == "pending":
+            gates = gate_manager.list_pending(auth.tenant_id)
+        else:
+            gates = gate_manager.list_all(auth.tenant_id)
     return APIResponse(data=gates)
 
 
@@ -108,9 +150,16 @@ async def approve_gate(
     gate_id: str,
     body: GateResolveRequest = GateResolveRequest(),
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[HumanGate]:
     """Approve a pending HITL gate."""
-    gate = gate_manager.approve(gate_id, approved_by=auth.user_id, note=body.note)
+    mgr = get_gate_manager(db)
+
+    if mgr is not gate_manager:
+        gate = await mgr.approve(db, gate_id, approved_by=auth.user_id, note=body.note)
+    else:
+        gate = gate_manager.approve(gate_id, approved_by=auth.user_id, note=body.note)
+
     if not gate:
         raise AppError(ErrorCode.NOT_FOUND, f"Gate {gate_id} not found or not pending")
     return APIResponse(data=gate)
@@ -121,9 +170,16 @@ async def reject_gate(
     gate_id: str,
     body: GateResolveRequest = GateResolveRequest(),
     auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[HumanGate]:
     """Reject a pending HITL gate."""
-    gate = gate_manager.reject(gate_id, rejected_by=auth.user_id, note=body.note)
+    mgr = get_gate_manager(db)
+
+    if mgr is not gate_manager:
+        gate = await mgr.reject(db, gate_id, rejected_by=auth.user_id, note=body.note)
+    else:
+        gate = gate_manager.reject(gate_id, rejected_by=auth.user_id, note=body.note)
+
     if not gate:
         raise AppError(ErrorCode.NOT_FOUND, f"Gate {gate_id} not found or not pending")
     return APIResponse(data=gate)
@@ -212,7 +268,7 @@ async def get_pdf_html(
 
     return HTMLResponse(content=report.html)
 
-@router.get("/pdf/{project_id}/download", response_class=Response, responses={200: {"content": {"application/pdf": {}}}}) # New endpoint for PDF download
+@router.get("/pdf/{project_id}/download", response_class=Response, responses={200: {"content": {"application/pdf": {}}}})
 async def download_pdf(
     project_id: str,
     auth: AuthContext = Depends(get_auth_context),
@@ -250,7 +306,7 @@ async def download_pdf(
     )
 
     if not report.pdf_bytes:
-        raise AppError(ErrorCode.INTERNAL_SERVER_ERROR, "Failed to generate PDF bytes.")
+        raise AppError(ErrorCode.INTERNAL, "Failed to generate PDF bytes.")
 
     return Response(content=report.pdf_bytes, media_type="application/pdf", headers={
         "Content-Disposition": f"attachment; filename=\"{project.name}_compliance_report.pdf\""

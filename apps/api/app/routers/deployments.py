@@ -66,6 +66,9 @@ async def trigger_deployment(
 
     settings = get_settings()
 
+    deployment_id: str | None = None
+    status_str: str = "running"
+
     if settings.use_temporal:
         # 3a. Start Temporal Workflow
         from app.workers.temporal_workflows import StagedDeploymentWorkflow
@@ -77,27 +80,39 @@ async def trigger_deployment(
             id=workflow_id,
             task_queue="deploy-queue",
         )
-        return APIResponse(data={
-            "deployment_id": workflow_id,
-            "status": "running",
-            "project_id": str(project.id),
-            "readiness_score": readiness_score,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-        })
+        deployment_id = workflow_id
     else:
         # 3b. In-process engine (dev/test)
-        from app.workers.temporal_workflows import deployment_engine
+        from app.workers.temporal_workflows import deployment_engine, DeployStage
         wf = deployment_engine.create_workflow(
             str(project.id), auth.tenant_id, readiness_score,
         )
-        return APIResponse(data={
-            "id": wf.id,
-            "deployment_id": wf.id,
-            "status": wf.status,
-            "project_id": str(project.id),
-            "readiness_score": readiness_score,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-        })
+        deployment_id = wf.id
+        status_str = wf.status
+
+    # Persist initial deployment stages to DeploymentStage table
+    stage_names = ["sandbox", "canary5", "canary25", "production"]
+    traffic_pcts = [0, 5, 25, 100]
+    for stage_name, traffic_pct in zip(stage_names, traffic_pcts):
+        stage = DeploymentStage(
+            deployment_id=deployment_id,
+            tenant_id=uuid.UUID(auth.tenant_id),
+            project_id=str(project.id),
+            stage_name=stage_name,
+            traffic_pct=traffic_pct,
+            status="pending",
+        )
+        db.add(stage)
+    await db.commit()
+
+    return APIResponse(data={
+        "id": deployment_id,
+        "deployment_id": deployment_id,
+        "status": status_str,
+        "project_id": str(project.id),
+        "readiness_score": readiness_score,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 @router.get("/{deployment_id}", response_model=APIResponse[dict])
@@ -181,3 +196,125 @@ async def list_deployments(
     items.sort(key=lambda x: x["created_at"], reverse=True)
 
     return APIResponse(data=items[:20])
+
+
+class AdvanceRequest(BaseModel):
+    """Optional parameters for advancing a deployment stage."""
+    inject_regression: bool = False
+
+
+@router.post("/{deployment_id}/advance", response_model=APIResponse[dict])
+async def advance_deployment(
+    deployment_id: str,
+    body: AdvanceRequest = AdvanceRequest(),
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[dict]:
+    """Advance a deployment to the next stage."""
+    settings = get_settings()
+
+    if settings.use_temporal:
+        # For Temporal mode, signal the workflow to advance
+        temporal = await _get_temporal_client()
+        handle = temporal.get_workflow_handle(deployment_id)
+        await handle.signal("advance")
+        return APIResponse(data={
+            "deployment_id": deployment_id,
+            "action": "advance_signaled",
+        })
+    else:
+        from app.workers.temporal_workflows import deployment_engine
+        wf = deployment_engine.get_workflow(deployment_id)
+        if not wf:
+            raise AppError(ErrorCode.NOT_FOUND, f"Deployment {deployment_id} not found")
+
+        wf = deployment_engine.advance_stage(deployment_id, inject_regression=body.inject_regression)
+
+        # Persist stage result to DeploymentStage table
+        for stage in wf.stages:
+            result = await db.execute(
+                select(DeploymentStage).where(
+                    DeploymentStage.deployment_id == deployment_id,
+                    DeploymentStage.stage_name == stage.name.value,
+                )
+            )
+            db_stage = result.scalar_one_or_none()
+            if db_stage:
+                db_stage.status = stage.status.value
+                if stage.metrics:
+                    db_stage.metrics_json = stage.metrics.model_dump()
+                if stage.status.value in ("complete", "failed", "rolled_back"):
+                    db_stage.completed_at = datetime.now(timezone.utc)
+                if stage.status.value in ("active", "complete"):
+                    db_stage.started_at = db_stage.started_at or datetime.now(timezone.utc)
+
+        await db.commit()
+
+        return APIResponse(data={
+            "deployment_id": wf.id,
+            "status": wf.status,
+            "current_stage": wf.current_stage.value if wf.current_stage else None,
+            "stages": [
+                {
+                    "name": s.name.value,
+                    "status": s.status.value,
+                    "metrics": s.metrics.model_dump() if s.metrics else None,
+                }
+                for s in wf.stages
+            ],
+        })
+
+
+@router.post("/{deployment_id}/rollback", response_model=APIResponse[dict])
+async def rollback_deployment(
+    deployment_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[dict]:
+    """Rollback the current deployment — sets all remaining stages to rolled_back."""
+    settings = get_settings()
+
+    if settings.use_temporal:
+        temporal = await _get_temporal_client()
+        handle = temporal.get_workflow_handle(deployment_id)
+        await handle.signal("rollback")
+        return APIResponse(data={
+            "deployment_id": deployment_id,
+            "action": "rollback_signaled",
+        })
+    else:
+        from app.workers.temporal_workflows import deployment_engine
+        wf = deployment_engine.get_workflow(deployment_id)
+        if not wf:
+            raise AppError(ErrorCode.NOT_FOUND, f"Deployment {deployment_id} not found")
+
+        # Rollback: mark all non-complete stages as rolled_back
+        from app.workers.temporal_workflows import StageStatus
+        for stage in wf.stages:
+            if stage.status not in (StageStatus.COMPLETE,):
+                stage.status = StageStatus.ROLLED_BACK
+        wf.status = "rolled_back"
+        wf.current_stage = None
+
+        # Persist to DB
+        result = await db.execute(
+            select(DeploymentStage).where(
+                DeploymentStage.deployment_id == deployment_id,
+            )
+        )
+        db_stages = result.scalars().all()
+        for db_stage in db_stages:
+            if db_stage.status not in ("completed", "complete"):
+                db_stage.status = "rolled_back"
+                db_stage.completed_at = datetime.now(timezone.utc)
+
+        await db.commit()
+
+        return APIResponse(data={
+            "deployment_id": wf.id,
+            "status": "rolled_back",
+            "stages": [
+                {"name": s.name.value, "status": s.status.value}
+                for s in wf.stages
+            ],
+        })

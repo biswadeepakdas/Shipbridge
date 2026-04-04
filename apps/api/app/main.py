@@ -29,6 +29,7 @@ from app.routers.webhooks import router as webhooks_router
 from app.routers.websocket import router as websocket_router # Import the new websocket router
 from app.routers.audit import router as audit_router  # Chain-of-thought audit trail
 from app.routers.events import router as events_router
+from app.routers.ingestion import router as ingestion_router
 
 logger = structlog.get_logger()
 
@@ -150,3 +151,4 @@ app.include_router(github_router)
 app.include_router(websocket_router) # Include the new websocket router
 app.include_router(audit_router)  # Chain-of-thought audit trail
 app.include_router(events_router)
+app.include_router(ingestion_router)

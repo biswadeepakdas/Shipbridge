@@ -110,3 +110,63 @@ export interface ReadinessGateResponse {
   remediation_steps: number;
   estimated_days: number;
 }
+
+/* ─── Ingestion types ──────────────────────────────────────── */
+
+export interface IngestionSourceOut {
+  id: string;
+  project_id: string;
+  mode: "github_repo" | "runtime_endpoint" | "sdk_instrumentation" | "manifest";
+  config_json: Record<string, unknown>;
+  status: "pending" | "validating" | "active" | "failed";
+  validation_result: Record<string, unknown> | null;
+  last_synced_at: string | null;
+  created_at: string;
+}
+
+export interface RuntimeTraceOut {
+  id: string;
+  trace_id: string;
+  span_id: string;
+  operation: string;
+  status: "ok" | "error";
+  duration_ms: number;
+  model: string | null;
+  tool_name: string | null;
+  error_message: string | null;
+  started_at: string;
+}
+
+/* ─── Governance types ─────────────────────────────────────── */
+
+export interface HITLGateOut {
+  id: string;
+  title: string;
+  description: string;
+  requested_by: string;
+  resource_type: string;
+  risk_level: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  details: Record<string, unknown>;
+  requested_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+}
+
+export interface AuditEntryOut {
+  id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  details: Record<string, unknown>;
+  user_id: string | null;
+  agent_id: string | null;
+  created_at: string;
+}
+
+export interface ManifestValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
